@@ -5,6 +5,7 @@ const shaders = @import("shaders");
 const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
 const Swapchain = @import("swapchain.zig").Swapchain;
 const ImGuiContext = @import("imgui_context.zig").ImGuiContext;
+const AudioContext = @import("audio_context.zig").AudioContext;
 const Allocator = std.mem.Allocator;
 
 const app_name = "Acid Breakout";
@@ -139,6 +140,9 @@ pub fn main() !void {
     );
     defer destroyCommandBuffers(gc, pool, allocator, cmdbufs);
 
+    const ac = try AudioContext.init();
+    defer ac.deinit();
+
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
         var w: c_int = undefined;
         var h: c_int = undefined;
@@ -154,11 +158,15 @@ pub fn main() !void {
 
         if (is_demo_open) c.igShowDemoWindow(&is_demo_open);
         if (is_config_open) {
-            if (c.igBegin("Config", &is_config_open, c.ImGuiWindowFlags_None)) {
+            if (c.igBegin(app_name, &is_config_open, c.ImGuiWindowFlags_None)) {
                 defer c.igEnd();
 
                 if (c.igCheckbox("Wait for VSync", &wait_for_vsync)) {
                     graphics_outdated = true;
+                }
+
+                if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
+                    ac.playTestSound() catch |err| std.log.err("Failed to play sound: {}", .{err});
                 }
             }
         }

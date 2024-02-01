@@ -5,6 +5,8 @@ pub usingnamespace @cImport({
     @cDefine("CIMGUI_USE_GLFW", {});
     @cInclude("cimgui.h");
     @cInclude("cimgui_impl.h");
+    @cInclude("AL/al.h");
+    @cInclude("AL/alc.h");
 });
 
 const vk = @import("vulkan");
