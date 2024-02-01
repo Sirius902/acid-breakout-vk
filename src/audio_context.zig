@@ -32,7 +32,7 @@ pub const AudioContext = struct {
 
     pub fn playTestSound(self: AudioContext) !void {
         _ = self;
-        const test_sample: []const u8 = @embedFile("assets/test.raw");
+        const test_sample: []const u8 = @embedFile("assets/sound/test.raw");
 
         var buffer: c.ALuint = undefined;
         c.alGenBuffers(1, &buffer);
