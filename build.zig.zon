@@ -11,6 +11,7 @@
     .paths = .{
         ".gitattributes",
         ".gitignore",
+        ".gitmodules",
         "build.zig",
         "build.zig.zon",
         "src",
