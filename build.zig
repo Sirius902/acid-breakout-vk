@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     exe.linkLibCpp();
 
     linkGlfw(b, exe, target);
+    linkOpenAl(b, exe, target);
     linkVulkan(b, exe, target);
     linkShaders(b, exe);
     linkImGui(b, exe, target);
@@ -54,6 +55,9 @@ fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         const arch_str = switch (target.result.cpu.arch) {
             .x86 => "x86",
             .x86_64 => "x64",
+            .arm, .aarch64_32 => "arm",
+            .aarch64 => "arm64",
+            .wasm32 => "wasm32",
             else => std.debug.panic("Unsupported CPU architecture: {}", .{target.result.cpu.arch}),
         };
 
@@ -66,18 +70,57 @@ fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         const vcpkg_lib_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "lib" });
         const vcpkg_include_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "include" });
 
-        const glfw_name = "glfw3";
+        const lib_name = "glfw3";
 
         compile.addIncludePath(.{ .path = vcpkg_include_path });
         compile.addLibraryPath(.{ .path = vcpkg_lib_path });
-        compile.linkSystemLibrary(glfw_name ++ "dll");
+        compile.linkSystemLibrary(lib_name ++ "dll");
 
         const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
 
-        const install_lib = installSharedLibWindows(b, vcpkg_bin_path, glfw_name);
+        const install_lib = installSharedLibWindows(b, vcpkg_bin_path, lib_name);
         compile.step.dependOn(&install_lib.step);
     } else {
         compile.linkSystemLibrary("glfw");
+    }
+}
+
+fn linkOpenAl(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
+    // Try to link libs using vcpkg on Windows
+    if (target.result.os.tag == .windows) {
+        const vcpkg_root = std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT") catch |err|
+            std.debug.panic("Expected VCPKG_ROOT env to be found: {}", .{err});
+
+        const arch_str = switch (target.result.cpu.arch) {
+            .x86 => "x86",
+            .x86_64 => "x64",
+            .arm, .aarch64_32 => "arm",
+            .aarch64 => "arm64",
+            .wasm32 => "wasm32",
+            else => std.debug.panic("Unsupported CPU architecture: {}", .{target.result.cpu.arch}),
+        };
+
+        const vcpkg_installed_arch_path = b.pathJoin(&[_][]const u8{
+            vcpkg_root,
+            "installed",
+            std.mem.concat(b.allocator, u8, &[_][]const u8{ arch_str, "-windows" }) catch unreachable,
+        });
+
+        const vcpkg_lib_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "lib" });
+        const vcpkg_include_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "include" });
+
+        const lib_name = "OpenAL32";
+
+        compile.addIncludePath(.{ .path = vcpkg_include_path });
+        compile.addLibraryPath(.{ .path = vcpkg_lib_path });
+        compile.linkSystemLibrary(lib_name);
+
+        const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
+
+        const install_lib = installSharedLibWindows(b, vcpkg_bin_path, lib_name);
+        compile.step.dependOn(&install_lib.step);
+    } else {
+        compile.linkSystemLibrary("openal");
     }
 }
 
