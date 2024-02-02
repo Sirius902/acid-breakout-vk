@@ -151,7 +151,10 @@ pub fn main() !void {
     var game = try Game.init();
     defer game.deinit();
 
+    var frame_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
+        try game.tick(frame_timer.lap());
+
         var w: c_int = undefined;
         var h: c_int = undefined;
         c.glfwGetFramebufferSize(window, &w, &h);
@@ -168,6 +171,12 @@ pub fn main() !void {
         if (is_config_open) {
             if (c.igBegin(app_name, &is_config_open, c.ImGuiWindowFlags_None)) {
                 defer c.igEnd();
+
+                const avg_fps = @round(game.averageFps() * 10) / 10;
+                const avg_fps_text = try std.fmt.allocPrint(allocator, "Average FPS: {d:.1}", .{avg_fps});
+                defer allocator.free(avg_fps_text);
+
+                c.igTextUnformatted(avg_fps_text.ptr, @as([*]u8, avg_fps_text.ptr) + avg_fps_text.len);
 
                 if (c.igCheckbox("Wait for VSync", &wait_for_vsync)) {
                     graphics_outdated = true;

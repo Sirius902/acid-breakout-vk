@@ -128,18 +128,15 @@ pub const AudioContext = struct {
     }
 
     fn audioThread(self: *AudioContext) void {
-        var tick_start = std.time.nanoTimestamp();
+        var tick_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
         while (!self.stop_flag.load(.Acquire)) {
-            const tick_end = std.time.nanoTimestamp();
-            defer {
-                const tick_time: u64 = @intCast(tick_end - tick_start);
-                const sleep_time = poll_time - @min(tick_time, poll_time);
-                // TODO: Windows will sleep for at least 30ms, see if more precision is required.
-                if (sleep_time > 0) std.time.sleep(sleep_time);
-                tick_start = std.time.nanoTimestamp();
-            }
-
+            tick_timer.reset();
             self.tickAudio() catch |err| log.err("Audio thread error: {}", .{err});
+
+            const tick_time = tick_timer.read();
+            const sleep_time = poll_time - @min(tick_time, poll_time);
+            // TODO: Windows will sleep for at least 30ms, see if more precision is required.
+            if (sleep_time > 0) std.time.sleep(sleep_time);
         }
     }
 
