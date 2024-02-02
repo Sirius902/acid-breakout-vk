@@ -1,6 +1,5 @@
 const std = @import("std");
 const c = @import("c.zig");
-const zwav = @import("zwav");
 const Sound = @import("sound.zig").Sound;
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.audio);
