@@ -12,6 +12,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    exe.root_module.addImport("zwav", b.dependency("zwav", .{}).module("zwav"));
+
     exe.linkLibC();
     exe.linkLibCpp();
 

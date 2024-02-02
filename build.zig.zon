@@ -7,6 +7,10 @@
             .url = "https://github.com/Snektron/vulkan-zig/archive/62e981ad4e5a5afdbd5051d10d2e8a211840fd2e.tar.gz",
             .hash = "1220cac0f5c2006252f1cf6c1ce8b88bfb136238dc48dd511635bb63dc66e119e02a",
         },
+        .zwav = .{
+            .url = "https://github.com/Sirius902/zwav/archive/c35a81a0e2c66ccd9666730ca01c54bba7bf07c2.tar.gz",
+            .hash = "1220b91bd4d90c1fa8d839fe7dfdf3b45bdb60e8d5f71127f85bedb53d68d6b32b08",
+        },
     },
     .paths = .{
         ".gitattributes",

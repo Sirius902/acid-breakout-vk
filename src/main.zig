@@ -6,7 +6,9 @@ const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
 const Swapchain = @import("swapchain.zig").Swapchain;
 const ImGuiContext = @import("imgui_context.zig").ImGuiContext;
 const AudioContext = @import("audio_context.zig").AudioContext;
+const Game = @import("game.zig").Game;
 const Allocator = std.mem.Allocator;
+const embedSound = @import("sound.zig").embedSound;
 
 const app_name = "Acid Breakout";
 
@@ -140,8 +142,15 @@ pub fn main() !void {
     );
     defer destroyCommandBuffers(gc, pool, allocator, cmdbufs);
 
-    const ac = try AudioContext.init();
+    const test_sound = comptime embedSound("assets/sound/ball-reflect.wav");
+
+    var ac = try AudioContext.init(allocator);
     defer ac.deinit();
+
+    try ac.cacheSound(&test_sound);
+
+    var game = try Game.init();
+    defer game.deinit();
 
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
         var w: c_int = undefined;
@@ -166,7 +175,7 @@ pub fn main() !void {
                 }
 
                 if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
-                    ac.playTestSound() catch |err| std.log.err("Failed to play sound: {}", .{err});
+                    ac.playSound(&test_sound.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
                 }
             }
         }
