@@ -1,6 +1,6 @@
 const std = @import("std");
 const c = @import("c.zig");
-const Sound = @import("sound.zig").Sound;
+const Sound = @import("assets").Sound;
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.audio);
 
@@ -101,7 +101,14 @@ pub const AudioContext = struct {
         try checkAlError();
         errdefer c.alDeleteBuffers(1, &buffer);
 
-        c.alBufferData(buffer, sound.format, sound.data.ptr, @intCast(sound.data.len), sound.sample_rate);
+        const al_format: c.ALenum = switch (sound.format) {
+            .mono8 => c.AL_FORMAT_MONO8,
+            .mono16 => c.AL_FORMAT_MONO16,
+            .stereo8 => c.AL_FORMAT_STEREO8,
+            .stereo16 => c.AL_FORMAT_STEREO16,
+        };
+
+        c.alBufferData(buffer, al_format, sound.data.ptr, @intCast(sound.data.len), @intCast(sound.sample_rate));
         try checkAlError();
 
         {

@@ -8,8 +8,8 @@
             .hash = "1220cac0f5c2006252f1cf6c1ce8b88bfb136238dc48dd511635bb63dc66e119e02a",
         },
         .zwav = .{
-            .url = "https://github.com/Sirius902/zwav/archive/c35a81a0e2c66ccd9666730ca01c54bba7bf07c2.tar.gz",
-            .hash = "1220b91bd4d90c1fa8d839fe7dfdf3b45bdb60e8d5f71127f85bedb53d68d6b32b08",
+            .url = "https://github.com/Sirius902/zwav/archive/c670be405c927afa4aeabcf1f6bdd0eeade0691f.tar.gz",
+            .hash = "12203e1b0a428e2ef379802e9f9b7676098f0e0784efa57c0e0c81b4c39b0bda2187",
         },
     },
     .paths = .{

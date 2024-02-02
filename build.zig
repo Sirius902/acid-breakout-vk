@@ -1,5 +1,6 @@
 const std = @import("std");
 const vkgen = @import("vulkan_zig");
+const AssetStep = @import("asset-gen/AssetStep.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -12,9 +13,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.root_module.addImport("zwav", b.dependency("zwav", .{}).module("zwav"));
-
-    const assets = AssetStep.create(b);
+    var assets = AssetStep.create(b);
+    assets.addAsset(.{ .name = "ball_reflect", .path = "assets/sound/ball-reflect.wav", .tag = .wav });
     exe.root_module.addImport("assets", assets.getModule());
 
     exe.linkLibC();
@@ -50,49 +50,6 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 }
-
-const AssetStep = struct {
-    step: std.Build.Step,
-    generated_file: std.Build.GeneratedFile,
-    assets_dir: std.fs.Dir,
-    assets_file_out: std.ArrayList(u8),
-    wav_files: std.ArrayList([]const u8),
-
-    // Update when asset generation changes.
-    const salt = "xL8jGBNiue%^*(#(";
-
-    pub fn create(owner: *std.Build) *AssetStep {
-        const self = owner.allocator.create(AssetStep) catch @panic("OOM");
-        self.* = .{
-            .step = std.Build.Step.init(.{
-                .id = .custom,
-                .name = "assets",
-                .owner = owner,
-                .makeFn = make,
-            }),
-            .generated_file = undefined,
-            .assets_dir = owner.cache_root.handle.makeOpenPath("assets", .{}) catch @panic("Failed to make assets directory"),
-            .assets_file_out = std.ArrayList(u8).init(owner.allocator),
-            .wav_files = std.ArrayList([]const u8).init(owner.allocator),
-        };
-        self.generated_file = .{ .step = &self.step };
-        return self;
-    }
-
-    pub fn getModule(self: *const AssetStep) *std.Build.Module {
-        return self.step.owner.createModule(.{ .root_source_file = self.getSource() });
-    }
-
-    pub fn getSource(self: *const AssetStep) std.Build.LazyPath {
-        return .{ .generated = &self.generated_file };
-    }
-
-    pub fn make(step: *std.Build.Step, progress: *std.Progress.Node) !void {
-        _ = progress;
-        const self = @fieldParentPtr(AssetStep, "step", step);
-        self.generated_file.path = @panic("Not implemented");
-    }
-};
 
 fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
     // Try to link libs using vcpkg on Windows

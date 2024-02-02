@@ -1,15 +1,14 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const c = @import("c.zig");
+const assets = @import("assets");
 const shaders = @import("shaders");
-const sounds = @import("sounds.zig");
 const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
 const Swapchain = @import("swapchain.zig").Swapchain;
 const ImGuiContext = @import("imgui_context.zig").ImGuiContext;
 const AudioContext = @import("audio_context.zig").AudioContext;
 const Game = @import("game.zig").Game;
 const Allocator = std.mem.Allocator;
-const embedSound = @import("sound.zig").embedSound;
 
 const app_name = "Acid Breakout";
 
@@ -146,7 +145,7 @@ pub fn main() !void {
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
 
-    try ac.cacheSound(&sounds.ball_reflect);
+    try ac.cacheSound(&assets.ball_reflect);
 
     var game = try Game.init();
     defer game.deinit();
@@ -193,7 +192,7 @@ pub fn main() !void {
                 }
 
                 if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
-                    ac.playSound(&sounds.ball_reflect.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
+                    ac.playSound(&assets.ball_reflect.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
                 }
 
                 if (c.igButton("Open Demo Window", .{ .x = 0, .y = 0 })) is_demo_open = true;
