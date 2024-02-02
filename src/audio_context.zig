@@ -10,12 +10,11 @@ pub const AudioContext = struct {
     sound_queue: Queue,
     sources: SourceList,
     thread: ?std.Thread,
-    stop_flag: AtomicBool,
+    stop_flag: std.atomic.Value(bool),
     rwlock: std.Thread.RwLock,
     dev: *c.ALCdevice,
     ctx: *c.ALCcontext,
-
-    const AtomicBool = std.atomic.Value(bool);
+    avg_ticktime_s: std.atomic.Value(f64),
 
     const Cache = std.AutoHashMap(Sound.Hash, CacheEntry);
 
@@ -53,10 +52,11 @@ pub const AudioContext = struct {
             .sound_queue = .{},
             .sources = .{},
             .thread = null,
-            .stop_flag = AtomicBool.init(false),
+            .stop_flag = std.atomic.Value(bool).init(false),
             .rwlock = .{},
             .dev = dev,
             .ctx = ctx,
+            .avg_ticktime_s = std.atomic.Value(f64).init(@as(f64, poll_time) / std.time.ns_per_s),
         };
         errdefer self.deinit();
 
@@ -127,6 +127,10 @@ pub const AudioContext = struct {
         self.sound_queue.prepend(node);
     }
 
+    pub fn averageTps(self: *const AudioContext) f64 {
+        return 1.0 / self.avg_ticktime_s.load(.Acquire);
+    }
+
     fn audioThread(self: *AudioContext) void {
         var tick_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
         while (!self.stop_flag.load(.Acquire)) {
@@ -137,6 +141,10 @@ pub const AudioContext = struct {
             const sleep_time = poll_time - @min(tick_time, poll_time);
             // TODO: Windows will sleep for at least 30ms, see if more precision is required.
             if (sleep_time > 0) std.time.sleep(sleep_time);
+
+            const alpha = 0.2;
+            const ticktime_s = @as(f64, @floatFromInt(tick_timer.read())) / std.time.ns_per_s;
+            self.avg_ticktime_s.store(alpha * ticktime_s + (1 - alpha) * self.avg_ticktime_s.load(.Unordered), .Release);
         }
     }
 

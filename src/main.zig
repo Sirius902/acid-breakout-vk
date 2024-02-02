@@ -172,11 +172,21 @@ pub fn main() !void {
             if (c.igBegin(app_name, &is_config_open, c.ImGuiWindowFlags_None)) {
                 defer c.igEnd();
 
-                const avg_fps = @round(game.averageFps() * 10) / 10;
-                const avg_fps_text = try std.fmt.allocPrint(allocator, "Average FPS: {d:.1}", .{avg_fps});
-                defer allocator.free(avg_fps_text);
+                {
+                    const avg_tps = @round(game.averageTps() * 10) / 10;
+                    const avg_tps_text = try std.fmt.allocPrint(allocator, "Average TPS: {d:.1}", .{avg_tps});
+                    defer allocator.free(avg_tps_text);
 
-                c.igTextUnformatted(avg_fps_text.ptr, @as([*]u8, avg_fps_text.ptr) + avg_fps_text.len);
+                    c.igTextUnformatted(avg_tps_text.ptr, @as([*]u8, avg_tps_text.ptr) + avg_tps_text.len);
+                }
+
+                {
+                    const avg_audiotick = @round(ac.averageTps() * 10) / 10;
+                    const avg_audiotick_text = try std.fmt.allocPrint(allocator, "Average Audio TPS: {d:.1}", .{avg_audiotick});
+                    defer allocator.free(avg_audiotick_text);
+
+                    c.igTextUnformatted(avg_audiotick_text.ptr, @as([*]u8, avg_audiotick_text.ptr) + avg_audiotick_text.len);
+                }
 
                 if (c.igCheckbox("Wait for VSync", &wait_for_vsync)) {
                     graphics_outdated = true;
