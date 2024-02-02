@@ -2,6 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const c = @import("c.zig");
 const shaders = @import("shaders");
+const sounds = @import("sounds.zig");
 const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
 const Swapchain = @import("swapchain.zig").Swapchain;
 const ImGuiContext = @import("imgui_context.zig").ImGuiContext;
@@ -44,7 +45,7 @@ const vertices = [_]Vertex{
     .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
 };
 
-var is_demo_open = true;
+var is_demo_open = false;
 var is_config_open = true;
 
 var graphics_outdated = false;
@@ -142,12 +143,10 @@ pub fn main() !void {
     );
     defer destroyCommandBuffers(gc, pool, allocator, cmdbufs);
 
-    const test_sound = comptime embedSound("assets/sound/ball-reflect.wav");
-
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
 
-    try ac.cacheSound(&test_sound);
+    try ac.cacheSound(&sounds.ball_reflect);
 
     var game = try Game.init();
     defer game.deinit();
@@ -175,8 +174,10 @@ pub fn main() !void {
                 }
 
                 if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
-                    ac.playSound(&test_sound.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
+                    ac.playSound(&sounds.ball_reflect.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
                 }
+
+                if (c.igButton("Open Demo Window", .{ .x = 0, .y = 0 })) is_demo_open = true;
             }
         }
 
