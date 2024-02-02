@@ -90,10 +90,12 @@ pub const AudioContext = struct {
     }
 
     pub fn cacheSound(self: *AudioContext, sound: *const Sound) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        {
+            self.rwlock.lock();
+            defer self.rwlock.unlock();
 
-        if (self.sound_cache.contains(sound.hash)) return;
+            if (self.sound_cache.contains(sound.hash)) return;
+        }
 
         var buffer: c.ALuint = undefined;
         c.alGenBuffers(1, &buffer);
@@ -103,16 +105,26 @@ pub const AudioContext = struct {
         c.alBufferData(buffer, sound.format, sound.data.ptr, @intCast(sound.data.len), sound.sample_rate);
         try checkAlError();
 
-        try self.sound_cache.putNoClobber(sound.hash, .{ .sound = sound, .buffer = buffer });
+        {
+            self.rwlock.lock();
+            defer self.rwlock.unlock();
+
+            try self.sound_cache.putNoClobber(sound.hash, .{ .sound = sound, .buffer = buffer });
+        }
     }
 
     pub fn playSound(self: *AudioContext, hash: *const Sound.Hash) !void {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        const entry = blk: {
+            self.rwlock.lockShared();
+            defer self.rwlock.unlockShared();
 
-        const entry = self.sound_cache.getPtr(hash.*) orelse return error.SoundNotCached;
+            break :blk self.sound_cache.getPtr(hash.*) orelse return error.SoundNotCached;
+        };
         const node = try self.allocator.create(Queue.Node);
         node.data = entry.buffer;
+
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
         self.sound_queue.prepend(node);
     }
 
