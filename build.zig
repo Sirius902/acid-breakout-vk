@@ -13,6 +13,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zlm = b.dependency("zlm", .{});
+    exe.root_module.addImport("zlm", zlm.module("zlm"));
+
     var assets = AssetStep.create(b);
     assets.addAsset(.{ .name = "ball_reflect", .path = "assets/sound/ball-reflect.wav", .tag = .wav });
     exe.root_module.addImport("assets", assets.getModule());

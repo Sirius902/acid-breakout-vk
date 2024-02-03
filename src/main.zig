@@ -1,14 +1,16 @@
 const std = @import("std");
-const vk = @import("vulkan");
 const c = @import("c.zig");
+const vk = @import("vulkan");
 const assets = @import("assets");
 const shaders = @import("shaders");
 const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
 const Swapchain = @import("swapchain.zig").Swapchain;
 const ImGuiContext = @import("imgui_context.zig").ImGuiContext;
 const AudioContext = @import("audio_context.zig").AudioContext;
-const Game = @import("game.zig").Game;
+const Game = @import("game/game.zig").Game;
 const Allocator = std.mem.Allocator;
+const vec2i = @import("math.zig").vec2i;
+const vec2u = @import("math.zig").vec2u;
 
 const app_name = "Acid Breakout";
 
@@ -147,19 +149,37 @@ pub fn main() !void {
 
     try ac.cacheSound(&assets.ball_reflect);
 
-    var game = try Game.init();
+    var game = try Game.init(vec2u(extent.width, extent.height));
     defer game.deinit();
 
     var frame_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
+        var mxf: f64 = undefined;
+        var myf: f64 = undefined;
+        c.glfwGetCursorPos(window, &mxf, &myf);
+
+        // TODO: Scale mouse position based on ratio of framebuffer size and window size.
+        const mx: c_int = @intFromFloat(@round(mxf));
+        const my: c_int = @intFromFloat(@round(myf));
+
+        var ww: c_int = undefined;
+        var wh: c_int = undefined;
+        c.glfwGetWindowSize(window, &ww, &wh);
+
+        var fw: c_int = undefined;
+        var fh: c_int = undefined;
+        c.glfwGetFramebufferSize(window, &fw, &fh);
+
+        const mouse_pos = if (mx >= 0 and mx < ww and my >= 0 and my < wh)
+            vec2u(@intCast(mx), @intCast(my))
+        else
+            null;
+
+        game.updateInput(mouse_pos);
         try game.tick(frame_timer.lap());
 
-        var w: c_int = undefined;
-        var h: c_int = undefined;
-        c.glfwGetFramebufferSize(window, &w, &h);
-
         // Don't present or resize swapchain while the window is minimized
-        if (w == 0 or h == 0) {
+        if (fw == 0 or fh == 0) {
             c.glfwPollEvents();
             continue;
         }
@@ -219,9 +239,9 @@ pub fn main() !void {
             else => |narrow| return narrow,
         };
 
-        if (state == .suboptimal or extent.width != @as(u32, @intCast(w)) or extent.height != @as(u32, @intCast(h)) or graphics_outdated) {
-            extent.width = @intCast(w);
-            extent.height = @intCast(h);
+        if (state == .suboptimal or extent.width != @as(u32, @intCast(fw)) or extent.height != @as(u32, @intCast(fh)) or graphics_outdated) {
+            extent.width = @intCast(fw);
+            extent.height = @intCast(fh);
             try swapchain.recreate(extent, wait_for_vsync);
 
             destroyFramebuffers(gc, allocator, framebuffers);

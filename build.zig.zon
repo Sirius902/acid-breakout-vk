@@ -7,6 +7,11 @@
             .url = "https://github.com/Snektron/vulkan-zig/archive/62e981ad4e5a5afdbd5051d10d2e8a211840fd2e.tar.gz",
             .hash = "1220cac0f5c2006252f1cf6c1ce8b88bfb136238dc48dd511635bb63dc66e119e02a",
         },
+        .zlm = .{
+            // TODO: Use main zlm repo after https://github.com/ziglibs/zlm/pull/20 is merged.
+            .url = "https://github.com/Sirius902/zlm/archive/2e4b6f714822f472e73627e332a8c3a1d35590b8.tar.gz",
+            .hash = "1220add113da7e335228cfc469bc907879df9f6d707ae5ff2c8ac6997bf2d58d931c",
+        },
         .zwav = .{
             .url = "https://github.com/Sirius902/zwav/archive/c670be405c927afa4aeabcf1f6bdd0eeade0691f.tar.gz",
             .hash = "12203e1b0a428e2ef379802e9f9b7676098f0e0784efa57c0e0c81b4c39b0bda2187",
