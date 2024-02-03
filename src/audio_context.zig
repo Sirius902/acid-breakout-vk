@@ -43,6 +43,10 @@ pub const AudioContext = struct {
             return error.AlcMakeContextCurrent;
         }
 
+        // Disable spatial audio since we don't need it.
+        c.alDistanceModel(c.AL_NONE);
+        try checkAlError();
+
         var self = try allocator.create(AudioContext);
         errdefer allocator.destroy(self);
 
@@ -82,6 +86,7 @@ pub const AudioContext = struct {
         while (cache_iter.next()) |entry| c.alDeleteBuffers(1, &entry.buffer);
         self.sound_cache.deinit();
 
+        _ = c.alcMakeContextCurrent(null);
         _ = c.alcDestroyContext(self.ctx);
         _ = c.alcCloseDevice(self.dev);
 
@@ -209,10 +214,6 @@ pub const AudioContext = struct {
         c.alSourcef(source, c.AL_PITCH, 1);
         try checkAlError();
         c.alSourcef(source, c.AL_GAIN, 1);
-        try checkAlError();
-        c.alSource3f(source, c.AL_POSITION, 0, 0, 0);
-        try checkAlError();
-        c.alSource3f(source, c.AL_VELOCITY, 0, 0, 0);
         try checkAlError();
         c.alSourcei(source, c.AL_LOOPING, c.AL_FALSE);
         try checkAlError();
