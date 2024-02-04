@@ -24,7 +24,7 @@ marked_for_delete: bool,
 
 const PosHistory = std.DoublyLinkedList(Vec2);
 
-const gravity = 1.25;
+const gravity = 20;
 const size = vec2(1, 1);
 const history_max_len = 8;
 const history_interval = @as(f32, 0.5) / history_max_len;
@@ -60,7 +60,7 @@ pub fn tick(self: *Self, game: *Game) void {
         self.history_timer = history_interval;
     }
 
-    if (!self.is_hit) self.vel.y -= gravity;
+    if (!self.is_hit) self.vel.y -= gravity * game.dt;
     self.handleCollisions(game);
 
     if (!self.isVisible(game)) self.marked_for_delete = true;
