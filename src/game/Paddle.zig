@@ -13,16 +13,11 @@ const Self = @This();
 center_x: f32,
 game_relative_size: Vec2,
 
-pub fn init(game: *Game) Self {
+pub fn spawn(game: *Game) Self {
     return .{
         .center_x = @as(f32, @floatFromInt(game.size.x)) * 0.5,
         .game_relative_size = vec2(0.225, 0.025),
     };
-}
-
-pub fn deinit(self: *Self, game: *Game) void {
-    _ = self;
-    _ = game;
 }
 
 pub fn tick(self: *Self, game: *Game) void {
@@ -35,7 +30,11 @@ pub fn tick(self: *Self, game: *Game) void {
 
 pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList.Error!void {
     const r = self.rect(game);
-    try draw_list.addRect(.{ .min = r.min, .max = r.max });
+    try draw_list.addRect(.{
+        .min = r.min,
+        .max = r.max,
+        .shading = .{ .rainbow_scroll = .{} },
+    });
 }
 
 pub fn rect(self: *const Self, game: *const Game) math.Rect {

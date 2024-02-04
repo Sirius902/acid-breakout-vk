@@ -10,5 +10,5 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     outColor = texture(inTex, inUV);
-    outColor.rgb = srgb_to_rgb(outColor.rgb);
+    outColor.rgb = lrgb_from_srgb(outColor.rgb);
 }

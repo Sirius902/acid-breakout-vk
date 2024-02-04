@@ -5,7 +5,10 @@ const math = @import("../math.zig");
 const Game = @import("game.zig").Game;
 const DrawList = @import("game.zig").DrawList;
 const Vec2 = zlm.Vec2;
+const Vec3 = zlm.Vec3;
 const vec2 = zlm.vec2;
+const vec3 = zlm.vec3;
+const vec4 = zlm.vec4;
 const Vec2i = math.Vec2i;
 const vec2i = math.vec2i;
 const Vec2u = math.Vec2u;
@@ -15,12 +18,19 @@ const Self = @This();
 
 pos: Vec2,
 vel: Vec2,
+// TODO: Derive color from collision and etc.
+color: Vec3 = vec3(1, 0, 0),
 delay: f32,
 distance_until_history: f32,
 pos_history: PosHistory,
 pos_history_nodes: [history_max_len]PosHistory.Node,
 is_hit: bool,
 marked_for_delete: bool,
+
+pub const SpawnParams = struct {
+    random_x_vel: bool = true,
+    delay: f32 = 0,
+};
 
 const PosHistory = std.DoublyLinkedList(Vec2);
 
@@ -29,22 +39,17 @@ const size = vec2(1, 1);
 const history_max_len = 8;
 const history_distance = 120 / history_max_len;
 
-pub fn init(game: *Game, is_first: bool) Self {
+pub fn spawn(game: *Game, params: SpawnParams) Self {
     return .{
         .pos = math.vec2Cast(f32, game.size).scale(0.5),
-        .vel = if (is_first) Vec2.zero else vec2(16 * 2 * (game.random().float(f32) - 0.5), 0),
-        .delay = 1,
+        .vel = if (params.random_x_vel) vec2(16 * 2 * (game.random().float(f32) - 0.5), 0) else Vec2.zero,
+        .delay = params.delay,
         .distance_until_history = 0,
         .pos_history = .{},
         .pos_history_nodes = undefined,
         .is_hit = false,
         .marked_for_delete = false,
     };
-}
-
-pub fn deinit(self: *Self, game: *Game) void {
-    _ = self;
-    _ = game;
 }
 
 pub fn tick(self: *Self, game: *Game) void {
@@ -56,7 +61,7 @@ pub fn tick(self: *Self, game: *Game) void {
     const prev_pos = self.pos;
 
     if (!self.is_hit) self.vel.y -= gravity * game.dt;
-    self.moveCollide(game);
+    self.moveAndCollide(game);
 
     if (self.distance_until_history > 0) {
         const dist = self.pos.sub(prev_pos).length();
@@ -72,15 +77,26 @@ pub fn tick(self: *Self, game: *Game) void {
 pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList.Error!void {
     _ = game;
 
-    var pos_history_node = self.pos_history.first;
-    while (pos_history_node) |node| {
-        const next = node.next;
-        defer pos_history_node = next;
+    const r = self.color.x;
+    const g = self.color.y;
+    const b = self.color.z;
 
-        try draw_list.addPoint(.{ .pos = node.data });
+    {
+        if (self.is_hit) try draw_list.beginPath();
+        defer if (self.is_hit) draw_list.endPath() catch {};
+
+        var tail_len: usize = self.pos_history.len;
+        var pos_history_node = self.pos_history.first;
+        while (pos_history_node) |node| : (tail_len -= 1) {
+            const next = node.next;
+            defer pos_history_node = next;
+
+            const alpha = @as(f32, @floatFromInt(tail_len)) / @as(f32, @floatFromInt(self.pos_history.len));
+            try draw_list.addPoint(.{ .pos = node.data, .shading = .{ .color = vec4(r, g, b, alpha) } });
+        }
     }
 
-    try draw_list.addPoint(.{ .pos = self.pos });
+    try draw_list.addPoint(.{ .pos = self.pos, .shading = .{ .color = vec4(r, g, b, 1) } });
 }
 
 fn isVisible(self: *const Self, game: *const Game) bool {
@@ -100,7 +116,7 @@ fn isVisible(self: *const Self, game: *const Game) bool {
     return false;
 }
 
-fn moveCollide(self: *Self, game: *Game) void {
+fn moveAndCollide(self: *Self, game: *Game) void {
     const target_pos = self.pos.add(self.vel.scale(game.dt));
     const target_rect = math.Rect.fromCenter(target_pos, size);
     const paddle_rect = game.paddle.rect(game);
@@ -118,6 +134,14 @@ fn moveCollide(self: *Self, game: *Game) void {
         self.vel.y *= -1;
         self.vel = self.vel.normalize().scale(speed);
 
+        self.pos = self.pos.add(self.vel.scale(game.dt));
+        return;
+    }
+
+    if (self.is_hit and target_rect.overlaps(game.strip.rect)) {
+        game.strip.notifyCollision(game, target_pos);
+
+        self.vel.y *= -1;
         self.pos = self.pos.add(self.vel.scale(game.dt));
         return;
     }

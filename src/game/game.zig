@@ -1,8 +1,10 @@
 const std = @import("std");
 const assets = @import("assets");
+const zlm = @import("zlm");
 const math = @import("../math.zig");
 const Sound = assets.Sound;
 const Paddle = @import("Paddle.zig");
+const Strip = @import("Strip.zig");
 const Ball = @import("Ball.zig");
 const Vec2 = @import("zlm").Vec2;
 const Vec2i = math.Vec2i;
@@ -34,12 +36,14 @@ pub const Game = struct {
     cursor_delta: Vec2,
     size: Vec2u,
     paddle: Paddle,
+    strip: Strip,
     // TODO: Allocate balls in arena?
     balls: BallList,
     sound_list: std.ArrayList(*const Sound.Hash),
     prng: Prng,
 
-    pub const target_dt = 1.0 / 60.0 * std.time.ns_per_s;
+    pub const target_dt = 1.0 / 60.0;
+    pub const max_dt = 1.0 / 4.0;
 
     const BallList = std.DoublyLinkedList(Ball);
 
@@ -47,22 +51,24 @@ pub const Game = struct {
         var self: Game = .{
             .allocator = allocator,
             .tick_arena = ArenaAllocator.init(allocator),
-            .dt = @as(f32, target_dt) / std.time.ns_per_s,
+            .dt = target_dt,
             .time = 0,
-            .avg_dt = @as(f64, target_dt) / std.time.ns_per_s,
+            .avg_dt = target_dt,
             .mouse_pos = null,
             .cursor_delta = Vec2.zero,
             .size = size,
             .paddle = undefined,
+            .strip = undefined,
             .balls = .{},
             .sound_list = std.ArrayList(*const Sound.Hash).init(allocator),
             .prng = Prng.init(0xDEADBEEFC0FFEE),
         };
-        self.paddle = Paddle.init(&self);
+        self.paddle = Paddle.spawn(&self);
+        self.strip = Strip.spawn(&self);
 
         const ball_node = try allocator.create(BallList.Node);
         errdefer allocator.destroy(ball_node);
-        ball_node.data = Ball.init(&self, true);
+        ball_node.data = Ball.spawn(&self, .{ .random_x_vel = false, .delay = 1 });
         self.balls.append(ball_node);
 
         return self;
@@ -73,7 +79,6 @@ pub const Game = struct {
         self.sound_list.deinit();
 
         while (self.balls.pop()) |node| self.allocator.destroy(node);
-        self.paddle.deinit(self);
     }
 
     /// Simulates one tick of the game.
@@ -83,9 +88,9 @@ pub const Game = struct {
         _ = self.tick_arena.reset(.retain_capacity);
         self.sound_list.clearRetainingCapacity();
 
-        const ticktime_f = @as(f64, @floatFromInt(ticktime));
-        self.dt = @floatCast(ticktime_f / std.time.ns_per_s);
-        self.time += self.dt;
+        const ticktime_s: f32 = @floatCast(@as(f64, @floatFromInt(ticktime)) / std.time.ns_per_s);
+        self.dt = @min(ticktime_s, max_dt);
+        self.time += ticktime_s;
 
         const alpha = 0.2;
         self.avg_dt = alpha * self.dt + (1 - alpha) * self.avg_dt;
@@ -118,6 +123,7 @@ pub const Game = struct {
             try ball.draw(self, draw_list);
         }
 
+        try self.strip.draw(self, draw_list);
         try self.paddle.draw(self, draw_list);
     }
 

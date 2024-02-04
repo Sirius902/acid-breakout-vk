@@ -25,29 +25,40 @@ const app_name = "Acid Breakout";
 
 const Vertex = struct {
     pos: Vec2,
-    color: Vec4,
+    uv: Vec2,
+
+    const binding = 0;
 
     const binding_description = vk.VertexInputBindingDescription{
-        .binding = 0,
+        .binding = binding,
         .stride = @sizeOf(Vertex),
         .input_rate = .vertex,
     };
 
     const attribute_description = [_]vk.VertexInputAttributeDescription{
         .{
-            .binding = 0,
+            .binding = binding,
             .location = 0,
             .format = .r32g32_sfloat,
             .offset = @offsetOf(Vertex, "pos"),
         },
         .{
-            .binding = 0,
+            .binding = binding,
             .location = 1,
-            .format = .r32g32b32a32_sfloat,
-            .offset = @offsetOf(Vertex, "color"),
+            .format = .r32g32_sfloat,
+            .offset = @offsetOf(Vertex, "uv"),
         },
     };
 };
+
+const rect_verts = [_]Vertex{
+    .{ .pos = Vec2.zero, .uv = Vec2.zero },
+    .{ .pos = Vec2.one, .uv = Vec2.one },
+    .{ .pos = vec2(0, 1), .uv = vec2(0, 1) },
+    .{ .pos = vec2(1, 0), .uv = vec2(1, 0) },
+};
+
+const rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
 
 const Shading = enum(u32) {
     color = 0,
@@ -55,11 +66,98 @@ const Shading = enum(u32) {
     rainbow_scroll = 2,
 };
 
+const Instance = struct {
+    model: zlm.Mat4,
+    color: Vec4,
+    shading: Shading,
+
+    const binding = 1;
+
+    const binding_description = vk.VertexInputBindingDescription{
+        .binding = binding,
+        .stride = @sizeOf(Instance),
+        .input_rate = .instance,
+    };
+
+    const attribute_description = [_]vk.VertexInputAttributeDescription{
+        .{
+            .binding = binding,
+            .location = 2,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 0 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 3,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 1 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 4,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 2 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 5,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 3 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 6,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "color"),
+        },
+        .{
+            .binding = binding,
+            .location = 7,
+            .format = .r32_uint,
+            .offset = @offsetOf(Instance, "shading"),
+        },
+    };
+};
+
+const PointVertex = struct {
+    pos: Vec2,
+    color: Vec4,
+    shading: Shading,
+
+    const binding = 0;
+
+    const binding_description = vk.VertexInputBindingDescription{
+        .binding = binding,
+        .stride = @sizeOf(PointVertex),
+        .input_rate = .vertex,
+    };
+
+    const attribute_description = [_]vk.VertexInputAttributeDescription{
+        .{
+            .binding = binding,
+            .location = 0,
+            .format = .r32g32_sfloat,
+            .offset = @offsetOf(PointVertex, "pos"),
+        },
+        .{
+            .binding = binding,
+            .location = 1,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(PointVertex, "color"),
+        },
+        .{
+            .binding = binding,
+            .location = 2,
+            .format = .r32_uint,
+            .offset = @offsetOf(PointVertex, "shading"),
+        },
+    };
+};
+
 const PushConstants = extern struct {
     view: zlm.Mat4,
     viewport_size: zlm.Vec2,
     time: f32,
-    shading: Shading,
 };
 
 const Config = struct {
@@ -192,8 +290,8 @@ pub fn main() !void {
     };
     defer allocator.free(imgui_ini_path);
 
-    const pipeline = try createPipeline(gc, pipeline_layout, render_pass, .triangle_list);
-    defer gc.vkd.destroyPipeline(gc.dev, pipeline, null);
+    const pipelines = try createPipelines(gc, pipeline_layout, render_pass);
+    defer destroyPipelines(pipelines, gc);
 
     var framebuffers = try createFramebuffers(gc, allocator, render_pass, swapchain);
     defer destroyFramebuffers(gc, allocator, framebuffers);
@@ -215,25 +313,79 @@ pub fn main() !void {
     );
     defer destroyCommandBuffers(gc, pool, allocator, cmdbufs);
 
-    var vertex_buffers = try allocator.alloc(?Buffer(Vertex), swapchain.swap_images.len);
-    defer {
-        for (vertex_buffers) |*vb_opt| if (vb_opt.*) |*vb| vb.deinit(gc);
-        allocator.free(vertex_buffers);
-    }
-    @memset(vertex_buffers, null);
+    var rect_vertex_buffer = try Buffer(Vertex).initWithCapacity(gc, rect_verts.len, .{
+        .usage = .{
+            .transfer_dst_bit = true,
+            .vertex_buffer_bit = true,
+        },
+        .sharing_mode = .exclusive,
+        .mem_flags = .{ .device_local_bit = true },
+    });
+    defer rect_vertex_buffer.deinit(gc);
+    try rect_vertex_buffer.upload(gc, pool, &rect_verts);
 
-    var index_buffers = try allocator.alloc(?Buffer(u16), swapchain.swap_images.len);
+    var rect_index_buffer = try Buffer(u16).initWithCapacity(gc, rect_indices.len, .{
+        .usage = .{
+            .transfer_dst_bit = true,
+            .index_buffer_bit = true,
+        },
+        .sharing_mode = .exclusive,
+        .mem_flags = .{ .device_local_bit = true },
+    });
+    defer rect_index_buffer.deinit(gc);
+    try rect_index_buffer.upload(gc, pool, &rect_indices);
+
+    const rect_instance_buffers = try allocator.alloc(Buffer(Instance), swapchain.swap_images.len);
+    for (rect_instance_buffers) |*ib| ib.* = Buffer(Instance).init(.{
+        .usage = .{ .vertex_buffer_bit = true },
+        .sharing_mode = .exclusive,
+        .mem_flags = .{ .host_visible_bit = true, .host_coherent_bit = true },
+    });
     defer {
-        for (index_buffers) |*ib_opt| if (ib_opt.*) |*ib| ib.deinit(gc);
-        allocator.free(index_buffers);
+        for (rect_instance_buffers) |*b| b.deinit(gc);
+        allocator.free(rect_instance_buffers);
     }
-    @memset(index_buffers, null);
+
+    const point_vertex_buffers = try allocator.alloc(Buffer(PointVertex), swapchain.swap_images.len);
+    for (point_vertex_buffers) |*ib| ib.* = Buffer(PointVertex).init(.{
+        .usage = .{ .vertex_buffer_bit = true },
+        .sharing_mode = .exclusive,
+        .mem_flags = .{ .host_visible_bit = true, .host_coherent_bit = true },
+    });
+    defer {
+        for (point_vertex_buffers) |*b| b.deinit(gc);
+        allocator.free(point_vertex_buffers);
+    }
+
+    // TODO: Put vertex and index data in the same buffer?
+    const line_vertex_buffers = try allocator.alloc(Buffer(PointVertex), swapchain.swap_images.len);
+    for (line_vertex_buffers) |*ib| ib.* = Buffer(PointVertex).init(.{
+        .usage = .{ .vertex_buffer_bit = true },
+        .sharing_mode = .exclusive,
+        .mem_flags = .{ .host_visible_bit = true, .host_coherent_bit = true },
+    });
+    defer {
+        for (line_vertex_buffers) |*b| b.deinit(gc);
+        allocator.free(line_vertex_buffers);
+    }
+
+    const line_index_buffers = try allocator.alloc(Buffer(u16), swapchain.swap_images.len);
+    for (line_index_buffers) |*ib| ib.* = Buffer(u16).init(.{
+        .usage = .{ .index_buffer_bit = true },
+        .sharing_mode = .exclusive,
+        .mem_flags = .{ .host_visible_bit = true, .host_coherent_bit = true },
+    });
+    defer {
+        for (line_index_buffers) |*b| b.deinit(gc);
+        allocator.free(line_index_buffers);
+    }
 
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
 
     ac.setGain(config.volume);
     try ac.cacheSound(&assets.ball_reflect);
+    try ac.cacheSound(&assets.ball_free);
 
     var game = try Game.init(vec2u(extent.width, extent.height), allocator);
     defer game.deinit();
@@ -323,7 +475,7 @@ pub fn main() !void {
                     is_save_config = true;
                 }
 
-                if (c.igButton("Reset Volume", c.ImVec2{ .x = 0, .y = 0 })) {
+                if (c.igButton("Reset Volume", .{ .x = 0, .y = 0 })) {
                     config.volume = 1;
                     ac.setGain(config.volume);
                     is_save_config = true;
@@ -352,51 +504,59 @@ pub fn main() !void {
 
         var draw_data = try executeDrawList(&draw_list, allocator);
         defer draw_data.deinit();
-        const vertices = draw_data.rect_vertices.items;
-        const indices = draw_data.rect_indices.items;
 
-        // TODO: Store Rect vertex data and index data in the same buffer.
-        const vertex_buffer_opt = &vertex_buffers[swapchain.image_index];
-        if (vertex_buffer_opt.*) |*vb| {
-            try vb.ensureTotalCapacity(gc, vertices.len);
-        } else {
-            vertex_buffer_opt.* = try Buffer(Vertex).init(gc, vertices.len, .{
-                .usage = .{
-                    .transfer_dst_bit = true,
-                    .vertex_buffer_bit = true,
-                },
-                .sharing_mode = .exclusive,
-            });
-        }
-        const vertex_buffer = &vertex_buffer_opt.*.?;
-        try vertex_buffer.upload(gc, pool, vertices);
-
-        const index_buffer_opt = &index_buffers[swapchain.image_index];
-        if (index_buffer_opt.*) |*ib| {
-            try ib.ensureTotalCapacity(gc, indices.len);
-        } else {
-            index_buffer_opt.* = try Buffer(u16).init(gc, indices.len, .{
-                .usage = .{
-                    .transfer_dst_bit = true,
-                    .index_buffer_bit = true,
-                },
-                .sharing_mode = .exclusive,
-            });
-        }
-        const index_buffer = &index_buffer_opt.*.?;
-        try index_buffer.upload(gc, pool, indices);
+        const current_image = try swapchain.acquireImage();
 
         const cmdbuf = cmdbufs[swapchain.image_index];
-        const current_image = try swapchain.acquireImage();
+        const rect_instance_buffer = &rect_instance_buffers[swapchain.image_index];
+        if (draw_data.rects.items.len > 0) {
+            try rect_instance_buffer.ensureTotalCapacity(gc, draw_data.rects.items.len);
+            const gpu_instances = try rect_instance_buffer.map(gc);
+            defer rect_instance_buffer.unmap(gc);
+            @memcpy(gpu_instances, draw_data.rects.items);
+        }
+        rect_instance_buffer.len = draw_data.rects.items.len;
+
+        const point_vertex_buffer = &point_vertex_buffers[swapchain.image_index];
+        if (draw_data.point_verts.items.len > 0) {
+            try point_vertex_buffer.ensureTotalCapacity(gc, draw_data.point_verts.items.len);
+            const gpu_points = try point_vertex_buffer.map(gc);
+            defer point_vertex_buffer.unmap(gc);
+            @memcpy(gpu_points, draw_data.point_verts.items);
+        }
+        point_vertex_buffer.len = draw_data.point_verts.items.len;
+
+        const line_vertex_buffer = &line_vertex_buffers[swapchain.image_index];
+        if (draw_data.line_verts.items.len > 0) {
+            try line_vertex_buffer.ensureTotalCapacity(gc, draw_data.line_verts.items.len);
+            const gpu_lines = try line_vertex_buffer.map(gc);
+            defer line_vertex_buffer.unmap(gc);
+            @memcpy(gpu_lines, draw_data.line_verts.items);
+        }
+        line_vertex_buffer.len = draw_data.line_verts.items.len;
+
+        const line_index_buffer = &line_index_buffers[swapchain.image_index];
+        if (draw_data.line_indices.items.len > 0) {
+            try line_index_buffer.ensureTotalCapacity(gc, draw_data.line_indices.items.len);
+            const gpu_indices = try line_index_buffer.map(gc);
+            defer line_index_buffer.unmap(gc);
+            @memcpy(gpu_indices, draw_data.line_indices.items);
+        }
+        line_index_buffer.len = draw_data.line_indices.items.len;
+
         try recordCommandBuffer(
             gc,
             &ic,
             &game,
-            vertex_buffer,
-            index_buffer,
+            &rect_vertex_buffer,
+            &rect_index_buffer,
+            rect_instance_buffer,
+            point_vertex_buffer,
+            line_vertex_buffer,
+            line_index_buffer,
             swapchain.extent,
             render_pass,
-            pipeline,
+            pipelines,
             pipeline_layout,
             cmdbuf,
             framebuffers[swapchain.image_index],
@@ -453,9 +613,20 @@ fn Buffer(comptime T: type) type {
         const Info = struct {
             usage: vk.BufferUsageFlags,
             sharing_mode: vk.SharingMode,
+            mem_flags: vk.MemoryPropertyFlags,
         };
 
-        pub fn init(gc: *const GraphicsContext, capacity: vk.DeviceSize, info: Info) !Self {
+        pub fn init(info: Info) Self {
+            return .{
+                .handle = .null_handle,
+                .memory = .null_handle,
+                .capacity = 0,
+                .len = 0,
+                .info = info,
+            };
+        }
+
+        pub fn initWithCapacity(gc: *const GraphicsContext, capacity: vk.DeviceSize, info: Info) !Self {
             const handle = try gc.vkd.createBuffer(gc.dev, &.{
                 .size = capacity * @sizeOf(T),
                 .usage = info.usage,
@@ -463,7 +634,7 @@ fn Buffer(comptime T: type) type {
             }, null);
             errdefer gc.vkd.destroyBuffer(gc.dev, handle, null);
             const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, handle);
-            const memory = try gc.allocate(mem_reqs, .{ .device_local_bit = true });
+            const memory = try gc.allocate(mem_reqs, info.mem_flags);
             errdefer gc.vkd.freeMemory(gc.dev, memory, null);
             try gc.vkd.bindBufferMemory(gc.dev, handle, memory, 0);
 
@@ -475,13 +646,26 @@ fn Buffer(comptime T: type) type {
             gc.vkd.destroyBuffer(gc.dev, self.handle, null);
         }
 
+        pub fn map(self: *Self, gc: *const GraphicsContext) ![*]T {
+            std.debug.assert(self.memory != .null_handle);
+            const gpu_memory = try gc.vkd.mapMemory(gc.dev, self.memory, 0, vk.WHOLE_SIZE, .{});
+            const data: [*]T = @ptrCast(@alignCast(gpu_memory));
+            return data;
+        }
+
+        pub fn unmap(self: *Self, gc: *const GraphicsContext) void {
+            gc.vkd.unmapMemory(gc.dev, self.memory);
+        }
+
         pub fn upload(
             self: *Self,
             gc: *const GraphicsContext,
             pool: vk.CommandPool,
             data: []const T,
         ) !void {
-            std.debug.assert(self.capacity >= data.len);
+            if (self.capacity < data.len) {
+                try self.ensureTotalCapacity(gc, data.len);
+            }
 
             const data_size = data.len * @sizeOf(T);
             const staging_buffer = try gc.vkd.createBuffer(gc.dev, &.{
@@ -510,27 +694,34 @@ fn Buffer(comptime T: type) type {
         pub fn ensureTotalCapacity(self: *Self, gc: *const GraphicsContext, capacity: usize) !void {
             if (self.capacity < capacity) {
                 var old = self.*;
-                self.* = try Self.init(gc, capacity, self.info);
+                self.* = try Self.initWithCapacity(gc, capacity, self.info);
                 old.deinit(gc);
             }
         }
     };
 }
 
+// TODO: Arena for draw data?
 const DrawData = struct {
-    rect_vertices: std.ArrayList(Vertex),
-    rect_indices: std.ArrayList(u16),
+    rects: std.ArrayList(Instance),
+    point_verts: std.ArrayList(PointVertex),
+    line_verts: std.ArrayList(PointVertex),
+    line_indices: std.ArrayList(u16),
 
     pub fn init(allocator: Allocator) DrawData {
         return .{
-            .rect_vertices = std.ArrayList(Vertex).init(allocator),
-            .rect_indices = std.ArrayList(u16).init(allocator),
+            .rects = std.ArrayList(Instance).init(allocator),
+            .point_verts = std.ArrayList(PointVertex).init(allocator),
+            .line_verts = std.ArrayList(PointVertex).init(allocator),
+            .line_indices = std.ArrayList(u16).init(allocator),
         };
     }
 
     pub fn deinit(self: *DrawData) void {
-        self.rect_vertices.deinit();
-        self.rect_indices.deinit();
+        self.rects.deinit();
+        self.point_verts.deinit();
+        self.line_verts.deinit();
+        self.line_indices.deinit();
     }
 };
 
@@ -538,61 +729,81 @@ fn executeDrawList(draw_list: *const DrawList, allocator: Allocator) !DrawData {
     var draw_data = DrawData.init(allocator);
     errdefer draw_data.deinit();
 
-    // TODO: Use lines topology with separate pipeline.
-    for (draw_list.paths.items) |path| {
-        for (path.points) |point| {
-            const point_size = Vec2.one.scale(2);
-            const min = point.pos.sub(point_size.scale(0.5));
-            const max = point.pos.add(point_size.scale(0.5));
+    for (draw_list.rects.items) |rect| {
+        const size = rect.size();
+        const model = zlm.Mat4.createScale(size.x, size.y, 1)
+            .mul(zlm.Mat4.createTranslation(vec3(rect.min.x, rect.min.y, 0)));
 
-            const rect_verts = [_]Vertex{
-                .{ .pos = min, .color = vec4(1, 0, 0, 1) },
-                .{ .pos = max, .color = vec4(0, 1, 0, 1) },
-                .{ .pos = vec2(min.x, max.y), .color = vec4(0, 0, 1, 1) },
-                .{ .pos = vec2(max.x, min.y), .color = vec4(0.25, 0, 1, 1) },
+        var color: Vec4 = undefined;
+        switch (rect.shading) {
+            .color => |cl| color = cl,
+            inline else => |alpha| color.w = alpha.a,
+        }
+
+        const shading: Shading = switch (rect.shading) {
+            .color => .color,
+            .rainbow => .rainbow,
+            .rainbow_scroll => .rainbow_scroll,
+        };
+
+        try draw_data.rects.append(.{
+            .model = model,
+            .color = color,
+            .shading = shading,
+        });
+    }
+
+    for (draw_list.points.items) |point| {
+        var color: Vec4 = undefined;
+        switch (point.shading) {
+            .color => |cl| color = cl,
+            inline else => |alpha| color.w = alpha.a,
+        }
+
+        const shading: Shading = switch (point.shading) {
+            .color => .color,
+            .rainbow => .rainbow,
+            .rainbow_scroll => .rainbow_scroll,
+        };
+
+        try draw_data.point_verts.append(.{
+            .pos = point.pos,
+            .color = color,
+            .shading = shading,
+        });
+    }
+
+    for (draw_list.paths.items) |path| {
+        if (path.points.len == 0) continue;
+
+        const path_start = draw_data.line_verts.items.len;
+        for (path.points) |point| {
+            var color: Vec4 = undefined;
+            switch (point.shading) {
+                .color => |cl| color = cl,
+                inline else => |alpha| color.w = alpha.a,
+            }
+
+            const shading: Shading = switch (point.shading) {
+                .color => .color,
+                .rainbow => .rainbow,
+                .rainbow_scroll => .rainbow_scroll,
             };
 
-            var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
-            for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
-
-            try draw_data.rect_vertices.appendSlice(&rect_verts);
-            try draw_data.rect_indices.appendSlice(&rect_indices);
+            try draw_data.line_verts.append(.{
+                .pos = point.pos,
+                .color = color,
+                .shading = shading,
+            });
         }
-    }
 
-    // TODO: Use points topology with separate pipeline.
-    for (draw_list.points.items) |point| {
-        const point_size = Vec2.one.scale(2);
-        const min = point.pos.sub(point_size.scale(0.5));
-        const max = point.pos.add(point_size.scale(0.5));
-
-        const rect_verts = [_]Vertex{
-            .{ .pos = min, .color = vec4(1, 0, 0, 1) },
-            .{ .pos = max, .color = vec4(0, 1, 0, 1) },
-            .{ .pos = vec2(min.x, max.y), .color = vec4(0, 0, 1, 1) },
-            .{ .pos = vec2(max.x, min.y), .color = vec4(0.25, 0, 1, 1) },
-        };
-
-        var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
-        for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
-
-        try draw_data.rect_vertices.appendSlice(&rect_verts);
-        try draw_data.rect_indices.appendSlice(&rect_indices);
-    }
-
-    for (draw_list.rects.items) |rect| {
-        const rect_verts = [_]Vertex{
-            .{ .pos = rect.min, .color = vec4(1, 0, 0, 1) },
-            .{ .pos = rect.max, .color = vec4(0, 1, 0, 1) },
-            .{ .pos = vec2(rect.min.x, rect.max.y), .color = vec4(0, 0, 1, 1) },
-            .{ .pos = vec2(rect.max.x, rect.min.y), .color = vec4(0.25, 0, 1, 1) },
-        };
-
-        var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
-        for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
-
-        try draw_data.rect_vertices.appendSlice(&rect_verts);
-        try draw_data.rect_indices.appendSlice(&rect_indices);
+        if (path.points.len == 1) {
+            try draw_data.line_indices.appendSlice(&[_]u16{ @intCast(path_start), @intCast(path_start) });
+        } else {
+            for (0..path.points.len - 1) |i| {
+                try draw_data.line_indices.appendSlice(&[_]u16{ @intCast(path_start + i), @intCast(path_start + i + 1) });
+            }
+        }
     }
 
     return draw_data;
@@ -657,11 +868,15 @@ fn recordCommandBuffer(
     gc: *const GraphicsContext,
     ic: *const ImGuiContext,
     game: *const Game,
-    vertex_buffer: *const Buffer(Vertex),
-    index_buffer: *const Buffer(u16),
+    rect_vertex_buffer: *const Buffer(Vertex),
+    rect_index_buffer: *const Buffer(u16),
+    rect_instance_buffer: *const Buffer(Instance),
+    point_vertex_buffer: *const Buffer(PointVertex),
+    line_vertex_buffer: *const Buffer(PointVertex),
+    line_index_buffer: *const Buffer(u16),
     extent: vk.Extent2D,
     render_pass: vk.RenderPass,
-    pipeline: vk.Pipeline,
+    pipelines: Pipelines,
     pipeline_layout: vk.PipelineLayout,
     cmdbuf: vk.CommandBuffer,
     framebuffer: vk.Framebuffer,
@@ -706,7 +921,6 @@ fn recordCommandBuffer(
         // TODO: Maintain game aspect ratio and use game size.
         .viewport_size = vec2(@floatFromInt(extent.width), @floatFromInt(extent.height)),
         .time = game.time,
-        .shading = .rainbow_scroll,
     };
 
     gc.vkd.cmdBeginRenderPass(cmdbuf, &.{
@@ -717,17 +931,86 @@ fn recordCommandBuffer(
         .p_clear_values = @as([*]const vk.ClearValue, @ptrCast(&clear)),
     }, .@"inline");
 
-    gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipeline);
-    const offsets = [_]vk.DeviceSize{0};
-    gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&vertex_buffer.handle), &offsets);
-    gc.vkd.cmdBindIndexBuffer(cmdbuf, index_buffer.handle, 0, .uint16);
-    gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
-    gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(index_buffer.len), 1, 0, 0, 0);
+    if (rect_instance_buffer.handle != .null_handle) {
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.rect);
+        gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
+        const rect_offsets = [_]vk.DeviceSize{ 0, 0 };
+        const rect_vertex_buffers = [_]vk.Buffer{ rect_vertex_buffer.handle, rect_instance_buffer.handle };
+        gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, rect_vertex_buffers.len, &rect_vertex_buffers, &rect_offsets);
+        gc.vkd.cmdBindIndexBuffer(cmdbuf, rect_index_buffer.handle, 0, .uint16);
+        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(rect_index_buffer.len), @intCast(rect_instance_buffer.len), 0, 0, 0);
+    }
+
+    if (point_vertex_buffer.handle != .null_handle) {
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.point);
+        gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
+        const point_offsets = [_]vk.DeviceSize{0};
+        gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&point_vertex_buffer.handle), &point_offsets);
+        gc.vkd.cmdDraw(cmdbuf, @intCast(point_vertex_buffer.len), 1, 0, 0);
+    }
+
+    if (line_vertex_buffer.handle != .null_handle) {
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.line);
+        gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
+        const line_offsets = [_]vk.DeviceSize{0};
+        gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&line_vertex_buffer.handle), &line_offsets);
+        gc.vkd.cmdBindIndexBuffer(cmdbuf, line_index_buffer.handle, 0, .uint16);
+        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(line_index_buffer.len), 1, 0, 0, 0);
+    }
 
     ic.drawTexture(cmdbuf);
 
     gc.vkd.cmdEndRenderPass(cmdbuf);
     try gc.vkd.endCommandBuffer(cmdbuf);
+}
+
+const Pipelines = struct {
+    rect: vk.Pipeline,
+    point: vk.Pipeline,
+    line: vk.Pipeline,
+};
+
+fn createPipelines(gc: *const GraphicsContext, layout: vk.PipelineLayout, render_pass: vk.RenderPass) !Pipelines {
+    const rect_vert = try gc.vkd.createShaderModule(gc.dev, &.{
+        .code_size = shaders.rect_vert.len,
+        .p_code = @as([*]const u32, @ptrCast(&shaders.rect_vert)),
+    }, null);
+    defer gc.vkd.destroyShaderModule(gc.dev, rect_vert, null);
+
+    const point_vert = try gc.vkd.createShaderModule(gc.dev, &.{
+        .code_size = shaders.point_vert.len,
+        .p_code = @as([*]const u32, @ptrCast(&shaders.point_vert)),
+    }, null);
+    defer gc.vkd.destroyShaderModule(gc.dev, point_vert, null);
+
+    const line_vert = try gc.vkd.createShaderModule(gc.dev, &.{
+        .code_size = shaders.line_vert.len,
+        .p_code = @as([*]const u32, @ptrCast(&shaders.line_vert)),
+    }, null);
+    defer gc.vkd.destroyShaderModule(gc.dev, line_vert, null);
+
+    const frag = try gc.vkd.createShaderModule(gc.dev, &.{
+        .code_size = shaders.main_frag.len,
+        .p_code = @as([*]const u32, @ptrCast(&shaders.main_frag)),
+    }, null);
+    defer gc.vkd.destroyShaderModule(gc.dev, frag, null);
+
+    const rect = try createPipeline(Vertex, Instance, gc, layout, render_pass, rect_vert, frag, .triangle_list);
+    errdefer gc.vkd.destroyPipeline(gc.dev, rect, null);
+
+    const point = try createPipeline(PointVertex, null, gc, layout, render_pass, point_vert, frag, .point_list);
+    errdefer gc.vkd.destroyPipeline(gc.dev, point, null);
+
+    const line = try createPipeline(PointVertex, null, gc, layout, render_pass, line_vert, frag, .line_list);
+    errdefer gc.vkd.destroyPipeline(gc.dev, line, null);
+
+    return .{ .rect = rect, .point = point, .line = line };
+}
+
+fn destroyPipelines(pipelines: Pipelines, gc: *const GraphicsContext) void {
+    gc.vkd.destroyPipeline(gc.dev, pipelines.rect, null);
+    gc.vkd.destroyPipeline(gc.dev, pipelines.point, null);
+    gc.vkd.destroyPipeline(gc.dev, pipelines.line, null);
 }
 
 fn createFramebuffers(gc: *const GraphicsContext, allocator: Allocator, render_pass: vk.RenderPass, swapchain: Swapchain) ![]vk.Framebuffer {
@@ -801,41 +1084,46 @@ fn createRenderPass(gc: *const GraphicsContext, swapchain: Swapchain) !vk.Render
 }
 
 fn createPipeline(
+    comptime Vert: type,
+    comptime Inst: ?type,
     gc: *const GraphicsContext,
     layout: vk.PipelineLayout,
     render_pass: vk.RenderPass,
+    vertex_shader: vk.ShaderModule,
+    fragment_shader: vk.ShaderModule,
     topology: vk.PrimitiveTopology,
 ) !vk.Pipeline {
-    const vert = try gc.vkd.createShaderModule(gc.dev, &.{
-        .code_size = shaders.main_vert.len,
-        .p_code = @as([*]const u32, @ptrCast(&shaders.main_vert)),
-    }, null);
-    defer gc.vkd.destroyShaderModule(gc.dev, vert, null);
-
-    const frag = try gc.vkd.createShaderModule(gc.dev, &.{
-        .code_size = shaders.main_frag.len,
-        .p_code = @as([*]const u32, @ptrCast(&shaders.main_frag)),
-    }, null);
-    defer gc.vkd.destroyShaderModule(gc.dev, frag, null);
-
     const pssci = [_]vk.PipelineShaderStageCreateInfo{
         .{
             .stage = .{ .vertex_bit = true },
-            .module = vert,
+            .module = vertex_shader,
             .p_name = "main",
         },
         .{
             .stage = .{ .fragment_bit = true },
-            .module = frag,
+            .module = fragment_shader,
             .p_name = "main",
         },
     };
 
+    const vertex_bindings = if (Inst) |I|
+        [_]vk.VertexInputBindingDescription{
+            Vert.binding_description,
+            I.binding_description,
+        }
+    else
+        [_]vk.VertexInputBindingDescription{Vert.binding_description};
+
+    const attribute_descriptions = if (Inst) |I|
+        Vert.attribute_description ++ I.attribute_description
+    else
+        Vert.attribute_description;
+
     const pvisci = vk.PipelineVertexInputStateCreateInfo{
-        .vertex_binding_description_count = 1,
-        .p_vertex_binding_descriptions = @ptrCast(&Vertex.binding_description),
-        .vertex_attribute_description_count = Vertex.attribute_description.len,
-        .p_vertex_attribute_descriptions = &Vertex.attribute_description,
+        .vertex_binding_description_count = vertex_bindings.len,
+        .p_vertex_binding_descriptions = &vertex_bindings,
+        .vertex_attribute_description_count = attribute_descriptions.len,
+        .p_vertex_attribute_descriptions = &attribute_descriptions,
     };
 
     const piasci = vk.PipelineInputAssemblyStateCreateInfo{

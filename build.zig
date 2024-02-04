@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
 
     var assets = AssetStep.create(b);
     assets.addAsset(.{ .name = "ball_reflect", .path = "assets/sound/ball-reflect.wav", .tag = .wav });
+    assets.addAsset(.{ .name = "ball_free", .path = "assets/sound/ball-free.wav", .tag = .wav });
     exe.root_module.addImport("assets", assets.getModule());
 
     exe.linkLibC();
@@ -161,7 +162,9 @@ fn linkShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
         "-o",
     );
 
-    shaders.add("main_vert", "src/shaders/main.vert", .{});
+    shaders.add("rect_vert", "src/shaders/rect.vert", .{});
+    shaders.add("point_vert", "src/shaders/point.vert", .{});
+    shaders.add("line_vert", "src/shaders/point.vert", .{ .args = &.{"-DIS_LINE"} });
     shaders.add("main_frag", "src/shaders/main.frag", .{});
     shaders.add("imgui_vert", "src/shaders/imgui.vert", .{});
     shaders.add("imgui_frag", "src/shaders/imgui.frag", .{});

@@ -174,8 +174,8 @@ pub const AudioContext = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
-        try self.startQueuedSounds();
         try self.removeFinishedSources();
+        try self.startQueuedSounds();
     }
 
     fn startQueuedSounds(self: *AudioContext) !void {

@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Vec2 = zlm.Vec2;
 const Vec3 = zlm.Vec3;
+const Vec4 = zlm.Vec4;
 const log = std.log.scoped(.draw);
 
 const Self = @This();
@@ -21,13 +22,39 @@ pub const Error = error{
     PathAlreadyStarted,
 } || Allocator.Error;
 
+pub const ShadingMethod = enum {
+    color,
+    rainbow,
+    rainbow_scroll,
+};
+
+pub const Alpha = struct {
+    a: f32 = 1,
+};
+
+pub const Shading = union(ShadingMethod) {
+    color: Vec4,
+    rainbow: Alpha,
+    rainbow_scroll: Alpha,
+};
+
 pub const Rect = struct {
     min: Vec2,
     max: Vec2,
+    shading: Shading,
+
+    pub fn center(self: Rect) Vec2 {
+        return self.min.add(self.max).scale(0.5);
+    }
+
+    pub fn size(self: Rect) Vec2 {
+        return self.max.sub(self.min);
+    }
 };
 
 pub const Point = struct {
     pos: Vec2,
+    shading: Shading,
 };
 
 pub const Path = struct {
