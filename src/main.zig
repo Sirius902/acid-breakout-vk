@@ -64,6 +64,7 @@ const PushConstants = extern struct {
 
 const Config = struct {
     wait_for_vsync: bool = true,
+    volume: f32 = 1,
 
     pub const file_name = "acid-breakout.json";
 
@@ -86,7 +87,7 @@ const Config = struct {
         };
         defer parsed.deinit();
         std.log.info("Loaded config from {s}", .{file_name});
-        return parsed.value;
+        return parsed.value.sanitize();
     }
 
     pub fn trySave(self: Config, dir: *std.fs.Dir) void {
@@ -97,9 +98,15 @@ const Config = struct {
         defer file.close();
 
         var json_writer = std.json.writeStream(file.writer(), .{ .whitespace = .indent_2 });
-        json_writer.write(self) catch |err| {
+        json_writer.write(self.sanitize()) catch |err| {
             std.log.err("Failed to write config as JSON: {}", .{err});
         };
+    }
+
+    fn sanitize(self: Config) Config {
+        var config = self;
+        config.volume = std.math.clamp(config.volume, 0, 1);
+        return config;
     }
 };
 
@@ -225,6 +232,7 @@ pub fn main() !void {
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
 
+    ac.setGain(config.volume);
     try ac.cacheSound(&assets.ball_reflect);
 
     var game = try Game.init(vec2u(extent.width, extent.height), allocator);
@@ -304,18 +312,33 @@ pub fn main() !void {
                     c.igTextUnformatted(time_text.ptr, @as([*]u8, time_text.ptr) + time_text.len);
                 }
 
+                var is_save_config = false;
                 if (c.igCheckbox("Wait for VSync", &config.wait_for_vsync)) {
                     is_graphics_outdated = true;
+                    is_save_config = true;
+                }
 
+                if (c.igSliderFloat("Volume", &config.volume, 0, 1, "%.2f", 0)) {
+                    ac.setGain(config.volume);
+                    is_save_config = true;
+                }
+
+                if (c.igButton("Reset Volume", c.ImVec2{ .x = 0, .y = 0 })) {
+                    config.volume = 1;
+                    ac.setGain(config.volume);
+                    is_save_config = true;
+                }
+
+                if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
+                    ac.playSound(&assets.ball_reflect.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
+                }
+
+                if (is_save_config) {
                     if (exe_dir) |*dir| {
                         config.trySave(dir);
                     } else {
                         std.log.err("Expected exe dir to exist when saving config", .{});
                     }
-                }
-
-                if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
-                    ac.playSound(&assets.ball_reflect.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
                 }
 
                 if (c.igButton("Open Demo Window", .{ .x = 0, .y = 0 })) is_demo_open = true;

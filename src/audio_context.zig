@@ -15,6 +15,7 @@ pub const AudioContext = struct {
     dev: *c.ALCdevice,
     ctx: *c.ALCcontext,
     avg_ticktime_s: std.atomic.Value(f64),
+    gain: std.atomic.Value(f32),
 
     const Cache = std.AutoHashMap(Sound.Hash, CacheEntry);
 
@@ -61,6 +62,7 @@ pub const AudioContext = struct {
             .dev = dev,
             .ctx = ctx,
             .avg_ticktime_s = std.atomic.Value(f64).init(@as(f64, poll_time) / std.time.ns_per_s),
+            .gain = std.atomic.Value(f32).init(1),
         };
         errdefer self.deinit();
 
@@ -91,6 +93,14 @@ pub const AudioContext = struct {
         _ = c.alcCloseDevice(self.dev);
 
         self.allocator.destroy(self);
+    }
+
+    pub fn getGain(self: *const AudioContext) f32 {
+        return self.gain.load(.Acquire);
+    }
+
+    pub fn setGain(self: *AudioContext, gain: f32) void {
+        self.gain.store(gain, .Release);
     }
 
     pub fn cacheSound(self: *AudioContext, sound: *const Sound) !void {
@@ -176,7 +186,7 @@ pub const AudioContext = struct {
             const source_node = try self.allocator.create(SourceList.Node);
             errdefer self.allocator.destroy(source_node);
 
-            source_node.data = try initSource(buffer);
+            source_node.data = try initSource(buffer, self.getGain());
             errdefer c.alDeleteSources(1, &source_node.data);
 
             self.sources.prepend(source_node);
@@ -205,7 +215,7 @@ pub const AudioContext = struct {
         }
     }
 
-    fn initSource(buffer: c.ALuint) !c.ALuint {
+    fn initSource(buffer: c.ALuint, gain: f32) !c.ALuint {
         var source: c.ALuint = undefined;
         c.alGenSources(1, &source);
         try checkAlError();
@@ -213,7 +223,7 @@ pub const AudioContext = struct {
 
         c.alSourcef(source, c.AL_PITCH, 1);
         try checkAlError();
-        c.alSourcef(source, c.AL_GAIN, 1);
+        c.alSourcef(source, c.AL_GAIN, gain);
         try checkAlError();
         c.alSourcei(source, c.AL_LOOPING, c.AL_FALSE);
         try checkAlError();
