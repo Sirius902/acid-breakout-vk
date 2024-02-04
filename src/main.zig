@@ -1,22 +1,30 @@
 const std = @import("std");
 const c = @import("c.zig");
 const vk = @import("vulkan");
+const zlm = @import("zlm");
 const assets = @import("assets");
 const shaders = @import("shaders");
+const math = @import("math.zig");
 const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
 const Swapchain = @import("swapchain.zig").Swapchain;
 const ImGuiContext = @import("imgui_context.zig").ImGuiContext;
 const AudioContext = @import("audio_context.zig").AudioContext;
 const Game = @import("game/game.zig").Game;
+const DrawList = @import("game/game.zig").DrawList;
 const Allocator = std.mem.Allocator;
-const vec2i = @import("math.zig").vec2i;
-const vec2u = @import("math.zig").vec2u;
+const Vec2 = zlm.Vec2;
+const Vec3 = zlm.Vec3;
+const vec2 = zlm.vec2;
+const vec3 = zlm.vec3;
+const vec2i = math.vec2i;
+const vec2u = math.vec2u;
 
 const app_name = "Acid Breakout";
 
 const Vertex = struct {
-    pos: [2]f32,
-    color: [3]f32,
+    pos: Vec2,
+    // TODO: Add alpha.
+    color: Vec3,
 
     const binding_description = vk.VertexInputBindingDescription{
         .binding = 0,
@@ -38,12 +46,6 @@ const Vertex = struct {
             .offset = @offsetOf(Vertex, "color"),
         },
     };
-};
-
-const vertices = [_]Vertex{
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
-    .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
 };
 
 var is_demo_open = false;
@@ -123,19 +125,6 @@ pub fn main() !void {
     var ic = try ImGuiContext.init(gc, &swapchain, allocator, render_pass, window, imgui_ini_path);
     defer ic.deinit();
 
-    const buffer = try gc.vkd.createBuffer(gc.dev, &.{
-        .size = @sizeOf(@TypeOf(vertices)),
-        .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
-        .sharing_mode = .exclusive,
-    }, null);
-    defer gc.vkd.destroyBuffer(gc.dev, buffer, null);
-    const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, buffer);
-    const memory = try gc.allocate(mem_reqs, .{ .device_local_bit = true });
-    defer gc.vkd.freeMemory(gc.dev, memory, null);
-    try gc.vkd.bindBufferMemory(gc.dev, buffer, memory, 0);
-
-    try uploadVertices(gc, pool, buffer);
-
     var cmdbufs = try createCommandBuffers(
         gc,
         pool,
@@ -149,8 +138,11 @@ pub fn main() !void {
 
     try ac.cacheSound(&assets.ball_reflect);
 
-    var game = try Game.init(vec2u(extent.width, extent.height));
+    var game = Game.init(vec2u(extent.width, extent.height), allocator);
     defer game.deinit();
+
+    var draw_list = DrawList.init(allocator);
+    defer draw_list.deinit();
 
     var frame_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
@@ -170,13 +162,17 @@ pub fn main() !void {
         var fh: c_int = undefined;
         c.glfwGetFramebufferSize(window, &fw, &fh);
 
+        // TODO: Supply mouse position in game units instead of window units.
         const mouse_pos = if (mx >= 0 and mx < ww and my >= 0 and my < wh)
             vec2u(@intCast(mx), @intCast(my))
         else
             null;
 
         game.updateInput(mouse_pos);
-        try game.tick(frame_timer.lap());
+        const tick_result = game.tick(frame_timer.lap());
+        for (tick_result.sound_list) |hash| {
+            try ac.playSound(hash);
+        }
 
         // Don't present or resize swapchain while the window is minimized
         if (fw == 0 or fh == 0) {
@@ -221,11 +217,35 @@ pub fn main() !void {
 
         ic.render();
 
+        draw_list.clear();
+        try game.draw(&draw_list);
+
+        const vertices = try executeDrawList(&draw_list, &game, allocator);
+        defer allocator.free(vertices);
+
+        // TODO: Reuse same buffer if it will fit data, if not then recreate.
+        // TODO: Create a vertex, index, and uniform buffer for each frame in flight.
+        const buffer = try gc.vkd.createBuffer(gc.dev, &.{
+            .size = vertices.len * @sizeOf(Vertex),
+            .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+            .sharing_mode = .exclusive,
+        }, null);
+        // TODO: Destroy it lmao.
+        // defer gc.vkd.destroyBuffer(gc.dev, buffer, null);
+        const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, buffer);
+        const memory = try gc.allocate(mem_reqs, .{ .device_local_bit = true });
+        // TODO: Free it lmao.
+        // defer gc.vkd.freeMemory(gc.dev, memory, null);
+        try gc.vkd.bindBufferMemory(gc.dev, buffer, memory, 0);
+
+        try uploadVertices(gc, pool, buffer, vertices);
+
         const cmdbuf = cmdbufs[swapchain.image_index];
         const current_image = try swapchain.acquireImage();
         try recordCommandBuffer(
             gc,
             &ic,
+            vertices,
             buffer,
             swapchain.extent,
             render_pass,
@@ -272,9 +292,49 @@ fn glfwErrorCallback(error_code: c_int, description: [*c]const u8) callconv(.C) 
     std.log.err("GLFW error {}: {s}", .{ error_code, description });
 }
 
-fn uploadVertices(gc: *const GraphicsContext, pool: vk.CommandPool, buffer: vk.Buffer) !void {
+// TODO: Instancing.
+fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: Allocator) ![]Vertex {
+    var vertices = std.ArrayList(Vertex).init(allocator);
+    errdefer vertices.deinit();
+
+    const size = math.vec2Cast(f32, game.size);
+    // Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
+    const model = zlm.Mat4.createOrthogonal(0, size.x, size.y, 0, 0.01, 1);
+
+    if (draw_list.lines.items.len > 0) @panic("Not implemented");
+    if (draw_list.points.items.len > 0) @panic("Not implemented");
+
+    for (draw_list.rects.items) |rect| {
+        var rect_verts = [_]Vertex{
+            .{ .pos = rect.min, .color = vec3(1, 0, 0) },
+            .{ .pos = rect.max, .color = vec3(0, 1, 0) },
+            .{ .pos = vec2(rect.min.x, rect.max.y), .color = vec3(0, 0, 1) },
+            .{ .pos = rect.min, .color = vec3(1, 0, 0) },
+            .{ .pos = vec2(rect.max.x, rect.min.y), .color = vec3(0.25, 0, 1) },
+            .{ .pos = rect.max, .color = vec3(0, 1, 0) },
+        };
+        for (&rect_verts) |*v| {
+            var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
+            pos = pos.transform(model);
+            v.pos = vec2(pos.x, pos.y);
+        }
+
+        try vertices.appendSlice(&rect_verts);
+    }
+
+    return try vertices.toOwnedSlice();
+}
+
+fn uploadVertices(
+    gc: *const GraphicsContext,
+    pool: vk.CommandPool,
+    buffer: vk.Buffer,
+    vertices: []const Vertex,
+) !void {
+    const vertex_data_size = vertices.len * @sizeOf(Vertex);
+
     const staging_buffer = try gc.vkd.createBuffer(gc.dev, &.{
-        .size = @sizeOf(@TypeOf(vertices)),
+        .size = vertex_data_size,
         .usage = .{ .transfer_src_bit = true },
         .sharing_mode = .exclusive,
     }, null);
@@ -289,10 +349,10 @@ fn uploadVertices(gc: *const GraphicsContext, pool: vk.CommandPool, buffer: vk.B
         defer gc.vkd.unmapMemory(gc.dev, staging_memory);
 
         const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data));
-        @memcpy(gpu_vertices, vertices[0..]);
+        @memcpy(gpu_vertices, vertices);
     }
 
-    try copyBuffer(gc, pool, buffer, staging_buffer, @sizeOf(@TypeOf(vertices)));
+    try copyBuffer(gc, pool, buffer, staging_buffer, vertex_data_size);
 }
 
 fn copyBuffer(gc: *const GraphicsContext, pool: vk.CommandPool, dst: vk.Buffer, src: vk.Buffer, size: vk.DeviceSize) !void {
@@ -353,6 +413,7 @@ fn destroyCommandBuffers(gc: *const GraphicsContext, pool: vk.CommandPool, alloc
 fn recordCommandBuffer(
     gc: *const GraphicsContext,
     ic: *const ImGuiContext,
+    vertices: []const Vertex,
     buffer: vk.Buffer,
     extent: vk.Extent2D,
     render_pass: vk.RenderPass,
@@ -403,7 +464,7 @@ fn recordCommandBuffer(
     gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipeline);
     const offset = [_]vk.DeviceSize{0};
     gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&buffer), &offset);
-    gc.vkd.cmdDraw(cmdbuf, vertices.len, 1, 0, 0);
+    gc.vkd.cmdDraw(cmdbuf, @intCast(vertices.len), 1, 0, 0);
 
     ic.drawTexture(cmdbuf);
 

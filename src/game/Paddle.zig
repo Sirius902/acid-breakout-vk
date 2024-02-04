@@ -1,7 +1,9 @@
 const std = @import("std");
+const assets = @import("assets");
 const zlm = @import("zlm");
 const math = @import("../math.zig");
 const Game = @import("game.zig").Game;
+const DrawList = @import("game.zig").DrawList;
 const Vec2 = zlm.Vec2;
 const vec2 = zlm.vec2;
 const Vec2i = math.Vec2i;
@@ -11,8 +13,15 @@ const vec2u = math.vec2u;
 
 center_x: f32,
 game_relative_size: Vec2,
+was_touching_bounds: bool = false,
 
 const Self = @This();
+
+// TODO: Move this to a common file.
+const Rect = struct {
+    min: Vec2,
+    max: Vec2,
+};
 
 pub fn init(game: *Game) Self {
     return .{
@@ -30,9 +39,19 @@ pub fn tick(self: *Self, game: *Game) void {
     if (game.mouse_pos) |pos| {
         self.center_x = @floatFromInt(pos.x);
     }
+
     self.moveInBounds(game);
 
-    std.log.debug("paddle: center={}, size={}", .{ self.center(game), self.size(game) });
+    const is_touching_bounds = self.isTouchingBounds(game);
+    if (is_touching_bounds and !self.was_touching_bounds) {
+        game.playSound(&assets.ball_reflect);
+    }
+    self.was_touching_bounds = is_touching_bounds;
+}
+
+pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList.Error!void {
+    const r = self.rect(game);
+    try draw_list.addRect(.{ .min = r.min, .max = r.max });
 }
 
 fn size(self: *const Self, game: *const Game) Vec2u {
@@ -44,13 +63,27 @@ fn center(self: *const Self, game: *const Game) Vec2 {
     return vec2(self.center_x, centerY(game));
 }
 
+fn rect(self: *const Self, game: *const Game) Rect {
+    const size_f = math.vec2Cast(f32, self.size(game));
+    const center_y = centerY(game);
+    return .{
+        .min = vec2(self.center_x - size_f.x * 0.5, center_y - size_f.y * 0.5),
+        .max = vec2(self.center_x + size_f.x * 0.5, center_y + size_f.y * 0.5),
+    };
+}
+
 fn moveInBounds(self: *Self, game: *const Game) void {
-    const size_x = self.size(game).x;
+    const size_x: f32 = @floatFromInt(self.size(game).x);
     self.center_x = std.math.clamp(
         self.center_x,
-        @as(f32, @floatFromInt(size_x)),
-        @as(f32, @floatFromInt(game.size.x - size_x)),
+        0.5 * size_x,
+        @as(f32, @floatFromInt(game.size.x)) - 0.5 * size_x,
     );
+}
+
+fn isTouchingBounds(self: *const Self, game: *const Game) bool {
+    const r = self.rect(game);
+    return r.min.x < 1 or r.max.x + 1 >= @as(f32, @floatFromInt(game.size.x));
 }
 
 fn centerY(game: *const Game) f32 {
