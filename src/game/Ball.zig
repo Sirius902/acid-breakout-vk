@@ -16,7 +16,7 @@ const Self = @This();
 pos: Vec2,
 vel: Vec2,
 delay: f32,
-history_timer: f32,
+distance_until_history: f32,
 pos_history: PosHistory,
 pos_history_nodes: [history_max_len]PosHistory.Node,
 is_hit: bool,
@@ -27,14 +27,14 @@ const PosHistory = std.DoublyLinkedList(Vec2);
 const gravity = 60;
 const size = vec2(1, 1);
 const history_max_len = 8;
-const history_interval = @as(f32, 0.5) / history_max_len;
+const history_distance = 120 / history_max_len;
 
 pub fn init(game: *Game, is_first: bool) Self {
     return .{
         .pos = math.vec2Cast(f32, game.size).scale(0.5),
         .vel = if (is_first) Vec2.zero else vec2(16 * 2 * (game.random().float(f32) - 0.5), 0),
         .delay = 1,
-        .history_timer = 0,
+        .distance_until_history = 0,
         .pos_history = .{},
         .pos_history_nodes = undefined,
         .is_hit = false,
@@ -53,15 +53,18 @@ pub fn tick(self: *Self, game: *Game) void {
         return;
     }
 
-    if (self.history_timer > 0) {
-        self.history_timer = @max(0, self.history_timer - game.dt);
-    } else {
-        self.updateHistory();
-        self.history_timer = history_interval;
-    }
+    const prev_pos = self.pos;
 
     if (!self.is_hit) self.vel.y -= gravity * game.dt;
-    self.handleCollisions(game);
+    self.moveCollide(game);
+
+    if (self.distance_until_history > 0) {
+        const dist = self.pos.sub(prev_pos).length();
+        self.distance_until_history = @max(0, self.distance_until_history - dist);
+    } else {
+        self.updateHistory();
+        self.distance_until_history = history_distance;
+    }
 
     if (!self.isVisible(game)) self.marked_for_delete = true;
 }
@@ -97,7 +100,7 @@ fn isVisible(self: *const Self, game: *const Game) bool {
     return false;
 }
 
-fn handleCollisions(self: *Self, game: *Game) void {
+fn moveCollide(self: *Self, game: *Game) void {
     const target_pos = self.pos.add(self.vel.scale(game.dt));
     const target_rect = math.Rect.fromCenter(target_pos, size);
     const paddle_rect = game.paddle.rect(game);
