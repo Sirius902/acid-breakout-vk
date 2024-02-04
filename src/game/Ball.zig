@@ -27,7 +27,7 @@ const PosHistory = std.DoublyLinkedList(Vec2);
 const gravity = 1.25;
 const size = vec2(1, 1);
 const history_max_len = 8;
-const history_interval = @as(f32, 0.25) / history_max_len;
+const history_interval = @as(f32, 0.5) / history_max_len;
 
 pub fn init(game: *Game, is_first: bool) Self {
     return .{

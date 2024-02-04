@@ -14,8 +14,10 @@ const DrawList = @import("game/game.zig").DrawList;
 const Allocator = std.mem.Allocator;
 const Vec2 = zlm.Vec2;
 const Vec3 = zlm.Vec3;
+const Vec4 = zlm.Vec4;
 const vec2 = zlm.vec2;
 const vec3 = zlm.vec3;
+const vec4 = zlm.vec4;
 const vec2i = math.vec2i;
 const vec2u = math.vec2u;
 
@@ -23,8 +25,7 @@ const app_name = "Acid Breakout";
 
 const Vertex = struct {
     pos: Vec2,
-    // TODO: Add alpha.
-    color: Vec3,
+    color: Vec4,
 
     const binding_description = vk.VertexInputBindingDescription{
         .binding = 0,
@@ -42,10 +43,23 @@ const Vertex = struct {
         .{
             .binding = 0,
             .location = 1,
-            .format = .r32g32b32_sfloat,
+            .format = .r32g32b32a32_sfloat,
             .offset = @offsetOf(Vertex, "color"),
         },
     };
+};
+
+const Shading = enum(u32) {
+    color = 0,
+    rainbow = 1,
+    rainbow_scroll = 2,
+};
+
+const PushConstants = extern struct {
+    view: zlm.Mat4,
+    viewport_size: zlm.Vec2,
+    time: f32,
+    shading: Shading,
 };
 
 var is_demo_open = false;
@@ -87,12 +101,18 @@ pub fn main() !void {
     var swapchain = try Swapchain.init(gc, allocator, extent, wait_for_vsync);
     defer swapchain.deinit();
 
+    const push_contant_range = vk.PushConstantRange{
+        .stage_flags = .{ .vertex_bit = true, .fragment_bit = true },
+        .size = @sizeOf(PushConstants),
+        .offset = 0,
+    };
+
     const pipeline_layout = try gc.vkd.createPipelineLayout(gc.dev, &.{
         .flags = .{},
         .set_layout_count = 0,
         .p_set_layouts = undefined,
-        .push_constant_range_count = 0,
-        .p_push_constant_ranges = undefined,
+        .push_constant_range_count = 1,
+        .p_push_constant_ranges = @ptrCast(&push_contant_range),
     }, null);
     defer gc.vkd.destroyPipelineLayout(gc.dev, pipeline_layout, null);
 
@@ -110,7 +130,7 @@ pub fn main() !void {
     };
     defer allocator.free(imgui_ini_path);
 
-    const pipeline = try createPipeline(gc, pipeline_layout, render_pass);
+    const pipeline = try createPipeline(gc, pipeline_layout, render_pass, .triangle_list);
     defer gc.vkd.destroyPipeline(gc.dev, pipeline, null);
 
     var framebuffers = try createFramebuffers(gc, allocator, render_pass, swapchain);
@@ -217,6 +237,14 @@ pub fn main() !void {
                     c.igTextUnformatted(avg_audiotick_text.ptr, @as([*]u8, avg_audiotick_text.ptr) + avg_audiotick_text.len);
                 }
 
+                {
+                    const time = @round(game.time * 10) / 10;
+                    const time_text = try std.fmt.allocPrint(allocator, "Time: {d:.1}s", .{time});
+                    defer allocator.free(time_text);
+
+                    c.igTextUnformatted(time_text.ptr, @as([*]u8, time_text.ptr) + time_text.len);
+                }
+
                 if (c.igCheckbox("Wait for VSync", &wait_for_vsync)) {
                     graphics_outdated = true;
                 }
@@ -234,7 +262,7 @@ pub fn main() !void {
         draw_list.clear();
         try game.draw(&draw_list);
 
-        var draw_data = try executeDrawList(&draw_list, &game, allocator);
+        var draw_data = try executeDrawList(&draw_list, allocator);
         defer draw_data.deinit();
         const vertices = draw_data.rect_vertices.items;
         const indices = draw_data.rect_indices.items;
@@ -275,11 +303,13 @@ pub fn main() !void {
         try recordCommandBuffer(
             gc,
             &ic,
+            &game,
             vertex_buffer,
             index_buffer,
             swapchain.extent,
             render_pass,
             pipeline,
+            pipeline_layout,
             cmdbuf,
             framebuffers[swapchain.image_index],
         );
@@ -416,13 +446,9 @@ const DrawData = struct {
     }
 };
 
-fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: Allocator) !DrawData {
+fn executeDrawList(draw_list: *const DrawList, allocator: Allocator) !DrawData {
     var draw_data = DrawData.init(allocator);
     errdefer draw_data.deinit();
-
-    const game_size = math.vec2Cast(f32, game.size);
-    // Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
-    const model = zlm.Mat4.createOrthogonal(0, game_size.x, game_size.y, 0, 0.01, 1);
 
     // TODO: Use lines topology with separate pipeline.
     for (draw_list.lines.items) |line| {
@@ -431,17 +457,12 @@ fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: All
             const min = point.pos.sub(point_size.scale(0.5));
             const max = point.pos.add(point_size.scale(0.5));
 
-            var rect_verts = [_]Vertex{
-                .{ .pos = min, .color = vec3(1, 0, 0) },
-                .{ .pos = max, .color = vec3(0, 1, 0) },
-                .{ .pos = vec2(min.x, max.y), .color = vec3(0, 0, 1) },
-                .{ .pos = vec2(max.x, min.y), .color = vec3(0.25, 0, 1) },
+            const rect_verts = [_]Vertex{
+                .{ .pos = min, .color = vec4(1, 0, 0, 1) },
+                .{ .pos = max, .color = vec4(0, 1, 0, 1) },
+                .{ .pos = vec2(min.x, max.y), .color = vec4(0, 0, 1, 1) },
+                .{ .pos = vec2(max.x, min.y), .color = vec4(0.25, 0, 1, 1) },
             };
-            for (&rect_verts) |*v| {
-                var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
-                pos = pos.transform(model);
-                v.pos = vec2(pos.x, pos.y);
-            }
 
             var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
             for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
@@ -457,17 +478,12 @@ fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: All
         const min = point.pos.sub(point_size.scale(0.5));
         const max = point.pos.add(point_size.scale(0.5));
 
-        var rect_verts = [_]Vertex{
-            .{ .pos = min, .color = vec3(1, 0, 0) },
-            .{ .pos = max, .color = vec3(0, 1, 0) },
-            .{ .pos = vec2(min.x, max.y), .color = vec3(0, 0, 1) },
-            .{ .pos = vec2(max.x, min.y), .color = vec3(0.25, 0, 1) },
+        const rect_verts = [_]Vertex{
+            .{ .pos = min, .color = vec4(1, 0, 0, 1) },
+            .{ .pos = max, .color = vec4(0, 1, 0, 1) },
+            .{ .pos = vec2(min.x, max.y), .color = vec4(0, 0, 1, 1) },
+            .{ .pos = vec2(max.x, min.y), .color = vec4(0.25, 0, 1, 1) },
         };
-        for (&rect_verts) |*v| {
-            var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
-            pos = pos.transform(model);
-            v.pos = vec2(pos.x, pos.y);
-        }
 
         var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
         for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
@@ -477,17 +493,12 @@ fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: All
     }
 
     for (draw_list.rects.items) |rect| {
-        var rect_verts = [_]Vertex{
-            .{ .pos = rect.min, .color = vec3(1, 0, 0) },
-            .{ .pos = rect.max, .color = vec3(0, 1, 0) },
-            .{ .pos = vec2(rect.min.x, rect.max.y), .color = vec3(0, 0, 1) },
-            .{ .pos = vec2(rect.max.x, rect.min.y), .color = vec3(0.25, 0, 1) },
+        const rect_verts = [_]Vertex{
+            .{ .pos = rect.min, .color = vec4(1, 0, 0, 1) },
+            .{ .pos = rect.max, .color = vec4(0, 1, 0, 1) },
+            .{ .pos = vec2(rect.min.x, rect.max.y), .color = vec4(0, 0, 1, 1) },
+            .{ .pos = vec2(rect.max.x, rect.min.y), .color = vec4(0.25, 0, 1, 1) },
         };
-        for (&rect_verts) |*v| {
-            var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
-            pos = pos.transform(model);
-            v.pos = vec2(pos.x, pos.y);
-        }
 
         var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
         for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
@@ -557,11 +568,13 @@ fn destroyCommandBuffers(gc: *const GraphicsContext, pool: vk.CommandPool, alloc
 fn recordCommandBuffer(
     gc: *const GraphicsContext,
     ic: *const ImGuiContext,
+    game: *const Game,
     vertex_buffer: *const Buffer(Vertex),
     index_buffer: *const Buffer(u16),
     extent: vk.Extent2D,
     render_pass: vk.RenderPass,
     pipeline: vk.Pipeline,
+    pipeline_layout: vk.PipelineLayout,
     cmdbuf: vk.CommandBuffer,
     framebuffer: vk.Framebuffer,
 ) !void {
@@ -597,6 +610,17 @@ fn recordCommandBuffer(
 
     try ic.renderDrawDataToTexture(cmdbuf);
 
+    const game_size = math.vec2Cast(f32, game.size);
+    // Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
+    const view = zlm.Mat4.createOrthogonal(0, game_size.x, game_size.y, 0, 0, 100);
+    var push_constants: PushConstants = .{
+        .view = view,
+        // TODO: Maintain game aspect ratio and use game size.
+        .viewport_size = vec2(@floatFromInt(extent.width), @floatFromInt(extent.height)),
+        .time = game.time,
+        .shading = .rainbow,
+    };
+
     gc.vkd.cmdBeginRenderPass(cmdbuf, &.{
         .render_pass = render_pass,
         .framebuffer = framebuffer,
@@ -609,6 +633,7 @@ fn recordCommandBuffer(
     const offsets = [_]vk.DeviceSize{0};
     gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&vertex_buffer.handle), &offsets);
     gc.vkd.cmdBindIndexBuffer(cmdbuf, index_buffer.handle, 0, .uint16);
+    gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
     gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(index_buffer.len), 1, 0, 0, 0);
 
     ic.drawTexture(cmdbuf);
@@ -691,16 +716,17 @@ fn createPipeline(
     gc: *const GraphicsContext,
     layout: vk.PipelineLayout,
     render_pass: vk.RenderPass,
+    topology: vk.PrimitiveTopology,
 ) !vk.Pipeline {
     const vert = try gc.vkd.createShaderModule(gc.dev, &.{
-        .code_size = shaders.triangle_vert.len,
-        .p_code = @as([*]const u32, @ptrCast(&shaders.triangle_vert)),
+        .code_size = shaders.main_vert.len,
+        .p_code = @as([*]const u32, @ptrCast(&shaders.main_vert)),
     }, null);
     defer gc.vkd.destroyShaderModule(gc.dev, vert, null);
 
     const frag = try gc.vkd.createShaderModule(gc.dev, &.{
-        .code_size = shaders.triangle_frag.len,
-        .p_code = @as([*]const u32, @ptrCast(&shaders.triangle_frag)),
+        .code_size = shaders.main_frag.len,
+        .p_code = @as([*]const u32, @ptrCast(&shaders.main_frag)),
     }, null);
     defer gc.vkd.destroyShaderModule(gc.dev, frag, null);
 
@@ -725,7 +751,7 @@ fn createPipeline(
     };
 
     const piasci = vk.PipelineInputAssemblyStateCreateInfo{
-        .topology = .triangle_list,
+        .topology = topology,
         .primitive_restart_enable = vk.FALSE,
     };
 
@@ -758,13 +784,13 @@ fn createPipeline(
     };
 
     const pcbas = vk.PipelineColorBlendAttachmentState{
-        .blend_enable = vk.FALSE,
-        .src_color_blend_factor = .one,
-        .dst_color_blend_factor = .zero,
+        .blend_enable = vk.TRUE,
+        .src_color_blend_factor = .src_alpha,
+        .dst_color_blend_factor = .one_minus_src_alpha,
         .color_blend_op = .add,
-        .src_alpha_blend_factor = .one,
-        .dst_alpha_blend_factor = .zero,
-        .alpha_blend_op = .add,
+        .src_alpha_blend_factor = .src_alpha,
+        .dst_alpha_blend_factor = .one_minus_src_alpha,
+        .alpha_blend_op = .subtract,
         .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
     };
 

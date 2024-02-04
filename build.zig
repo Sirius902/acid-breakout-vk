@@ -161,8 +161,8 @@ fn linkShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
         "-o",
     );
 
-    shaders.add("triangle_vert", "src/shaders/triangle.vert", .{});
-    shaders.add("triangle_frag", "src/shaders/triangle.frag", .{});
+    shaders.add("main_vert", "src/shaders/main.vert", .{});
+    shaders.add("main_frag", "src/shaders/main.frag", .{});
     shaders.add("imgui_vert", "src/shaders/imgui.vert", .{});
     shaders.add("imgui_frag", "src/shaders/imgui.frag", .{});
     compile.root_module.addImport("shaders", shaders.getModule());

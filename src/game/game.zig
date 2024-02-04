@@ -25,6 +25,7 @@ pub const Game = struct {
     tick_arena: ArenaAllocator,
     /// The time elapsed from the previous tick to the current tick in seconds.
     dt: f32,
+    time: f32,
     avg_dt: f64,
     // TODO: Gamepad input.
     /// Last known mouse position within the game window.
@@ -47,6 +48,7 @@ pub const Game = struct {
             .allocator = allocator,
             .tick_arena = ArenaAllocator.init(allocator),
             .dt = @as(f32, target_dt) / std.time.ns_per_s,
+            .time = 0,
             .avg_dt = @as(f64, target_dt) / std.time.ns_per_s,
             .mouse_pos = null,
             .cursor_delta = Vec2.zero,
@@ -83,6 +85,7 @@ pub const Game = struct {
 
         const ticktime_f = @as(f64, @floatFromInt(ticktime));
         self.dt = @floatCast(ticktime_f / std.time.ns_per_s);
+        self.time += self.dt;
 
         const alpha = 0.2;
         self.avg_dt = alpha * self.dt + (1 - alpha) * self.avg_dt;
