@@ -451,8 +451,8 @@ fn executeDrawList(draw_list: *const DrawList, allocator: Allocator) !DrawData {
     errdefer draw_data.deinit();
 
     // TODO: Use lines topology with separate pipeline.
-    for (draw_list.lines.items) |line| {
-        for (line.points) |point| {
+    for (draw_list.paths.items) |path| {
+        for (path.points) |point| {
             const point_size = Vec2.one.scale(2);
             const min = point.pos.sub(point_size.scale(0.5));
             const max = point.pos.add(point_size.scale(0.5));

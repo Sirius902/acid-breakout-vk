@@ -12,13 +12,13 @@ allocator: Allocator,
 arena: ArenaAllocator,
 rects: std.ArrayList(Rect),
 points: std.ArrayList(Point),
-lines: std.ArrayList(Line),
-line_buf: std.ArrayList(Point),
-is_line_started: bool = false,
+paths: std.ArrayList(Path),
+path_buf: std.ArrayList(Point),
+is_path_started: bool = false,
 
 pub const Error = error{
-    LineNotStarted,
-    LineAlreadyStarted,
+    PathNotStarted,
+    PathAlreadyStarted,
 } || Allocator.Error;
 
 pub const Rect = struct {
@@ -30,7 +30,7 @@ pub const Point = struct {
     pos: Vec2,
 };
 
-pub const Line = struct {
+pub const Path = struct {
     points: []const Point,
 };
 
@@ -40,32 +40,32 @@ pub fn init(allocator: Allocator) Self {
         .arena = ArenaAllocator.init(allocator),
         .rects = std.ArrayList(Rect).init(allocator),
         .points = std.ArrayList(Point).init(allocator),
-        .lines = std.ArrayList(Line).init(allocator),
-        .line_buf = std.ArrayList(Point).init(allocator),
+        .paths = std.ArrayList(Path).init(allocator),
+        .path_buf = std.ArrayList(Point).init(allocator),
     };
 }
 
 pub fn deinit(self: *Self) void {
     self.arena.deinit();
-    self.line_buf.deinit();
+    self.path_buf.deinit();
     self.rects.deinit();
     self.points.deinit();
-    self.lines.deinit();
+    self.paths.deinit();
 }
 
 pub fn clear(self: *Self) void {
     _ = self.arena.reset(.retain_capacity);
 
-    if (self.is_line_started) {
-        log.warn("Expected line to end", .{});
+    if (self.is_path_started) {
+        log.warn("Expected path to end", .{});
 
-        self.is_line_started = false;
-        self.line_buf.clearRetainingCapacity();
+        self.is_path_started = false;
+        self.path_buf.clearRetainingCapacity();
     }
 
     self.rects.clearRetainingCapacity();
     self.points.clearRetainingCapacity();
-    self.lines.clearRetainingCapacity();
+    self.paths.clearRetainingCapacity();
 }
 
 pub fn addRect(self: *Self, rect: Rect) Error!void {
@@ -74,23 +74,23 @@ pub fn addRect(self: *Self, rect: Rect) Error!void {
 }
 
 pub fn addPoint(self: *Self, point: Point) Error!void {
-    if (self.is_line_started) {
-        try self.line_buf.append(point);
+    if (self.is_path_started) {
+        try self.path_buf.append(point);
     } else {
         try self.points.append(point);
     }
 }
 
-pub fn beginLine(self: *Self) Error!void {
-    if (self.is_line_started) return error.LineAlreadyStarted;
-    self.is_line_started = true;
+pub fn beginPath(self: *Self) Error!void {
+    if (self.is_path_started) return error.PathAlreadyStarted;
+    self.is_path_started = true;
 }
 
-pub fn endLine(self: *Self) Error!void {
-    if (!self.is_line_started) return error.LineNotStarted;
-    self.is_line_started = false;
+pub fn endPath(self: *Self) Error!void {
+    if (!self.is_path_started) return error.PathNotStarted;
+    self.is_path_started = false;
 
-    const points = try self.arena.allocator().dupe(Point, self.line_buf.items);
-    try self.lines.append(.{ .points = points });
-    self.line_buf.clearRetainingCapacity();
+    const points = try self.arena.allocator().dupe(Point, self.path_buf.items);
+    try self.paths.append(.{ .points = points });
+    self.path_buf.clearRetainingCapacity();
 }
