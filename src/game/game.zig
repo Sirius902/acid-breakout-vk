@@ -4,6 +4,7 @@ const math = @import("../math.zig");
 const Sound = assets.Sound;
 const Paddle = @import("Paddle.zig");
 const Ball = @import("Ball.zig");
+const Vec2 = @import("zlm").Vec2;
 const Vec2i = math.Vec2i;
 const Vec2u = math.Vec2u;
 const Allocator = std.mem.Allocator;
@@ -27,9 +28,9 @@ pub const Game = struct {
     avg_dt: f64,
     // TODO: Gamepad input.
     /// Last known mouse position within the game window.
-    mouse_pos: ?Vec2u,
+    mouse_pos: ?Vec2,
     /// The number of units the player's cursor changed since the last tick.
-    cursor_delta: Vec2i,
+    cursor_delta: Vec2,
     size: Vec2u,
     paddle: Paddle,
     // TODO: Allocate balls in arena?
@@ -48,7 +49,7 @@ pub const Game = struct {
             .dt = @as(f32, target_dt) / std.time.ns_per_s,
             .avg_dt = @as(f64, target_dt) / std.time.ns_per_s,
             .mouse_pos = null,
-            .cursor_delta = Vec2i.zero,
+            .cursor_delta = Vec2.zero,
             .size = size,
             .paddle = undefined,
             .balls = .{},
@@ -117,14 +118,14 @@ pub const Game = struct {
         try self.paddle.draw(self, draw_list);
     }
 
-    pub fn updateInput(self: *Game, mouse_pos: ?Vec2u) void {
+    pub fn updateInput(self: *Game, mouse_pos: ?Vec2) void {
         self.cursor_delta = blk: {
             if (self.mouse_pos) |prev_pos| {
                 if (mouse_pos) |pos| {
-                    break :blk math.vec2Cast(i32, pos).sub(math.vec2Cast(i32, prev_pos));
+                    break :blk pos.sub(prev_pos);
                 }
             }
-            break :blk Vec2i.zero;
+            break :blk Vec2.zero;
         };
 
         if (mouse_pos) |pos| {
@@ -136,6 +137,10 @@ pub const Game = struct {
         self.sound_list.append(&sound.hash) catch |err| {
             log.err("Failure adding to sound list: {}", .{err});
         };
+    }
+
+    pub fn rect(self: *const Game) math.Rect {
+        return .{ .min = Vec2.zero, .max = math.vec2Cast(f32, self.size) };
     }
 
     pub fn random(self: *Game) std.rand.Random {

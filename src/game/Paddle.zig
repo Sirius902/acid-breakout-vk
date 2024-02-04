@@ -27,7 +27,7 @@ pub fn deinit(self: *Self, game: *Game) void {
 
 pub fn tick(self: *Self, game: *Game) void {
     if (game.mouse_pos) |pos| {
-        self.center_x = @floatFromInt(pos.x);
+        self.center_x = pos.x;
     }
 
     self.moveInBounds(game);
@@ -43,13 +43,13 @@ pub fn rect(self: *const Self, game: *const Game) math.Rect {
     return math.Rect.fromCenter(vec2(self.center_x, centerY(game)), size_f);
 }
 
+pub fn center(self: *const Self, game: *const Game) Vec2 {
+    return vec2(self.center_x, centerY(game));
+}
+
 fn size(self: *const Self, game: *const Game) Vec2u {
     const size_f = math.vec2Cast(f32, game.size).mul(self.game_relative_size);
     return math.vec2Cast(u32, math.vec2Round(size_f));
-}
-
-fn center(self: *const Self, game: *const Game) Vec2 {
-    return vec2(self.center_x, centerY(game));
 }
 
 fn moveInBounds(self: *Self, game: *const Game) void {

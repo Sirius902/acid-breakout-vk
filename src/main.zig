@@ -164,21 +164,21 @@ pub fn main() !void {
         var myf: f64 = undefined;
         c.glfwGetCursorPos(window, &mxf, &myf);
 
-        // TODO: Scale mouse position based on ratio of framebuffer size and window size.
         const mx: c_int = @intFromFloat(@round(mxf));
         const my: c_int = @intFromFloat(@round(myf));
 
         var ww: c_int = undefined;
         var wh: c_int = undefined;
         c.glfwGetWindowSize(window, &ww, &wh);
+        const window_size = vec2(@floatFromInt(ww), @floatFromInt(wh));
 
+        // TODO: Figure out what else needs to be done to work properly on high DPI displays.
         var fw: c_int = undefined;
         var fh: c_int = undefined;
         c.glfwGetFramebufferSize(window, &fw, &fh);
 
-        // TODO: Supply mouse position in game units instead of window units.
         const mouse_pos = if (mx >= 0 and mx < ww and my >= 0 and my < wh)
-            vec2u(@intCast(mx), @intCast(my))
+            vec2(@floatCast(mxf), @floatCast(myf)).mul(math.vec2Cast(f32, game.size)).div(window_size)
         else
             null;
 

@@ -26,7 +26,7 @@ const PosHistory = std.DoublyLinkedList(Vec2);
 
 const gravity = 1.25;
 const size = vec2(1, 1);
-const history_max_len = 16;
+const history_max_len = 8;
 const history_interval = @as(f32, 0.25) / history_max_len;
 
 pub fn init(game: *Game, is_first: bool) Self {
@@ -54,30 +54,14 @@ pub fn tick(self: *Self, game: *Game) void {
     }
 
     if (self.history_timer > 0) {
-        self.history_timer -= game.dt;
+        self.history_timer = @max(0, self.history_timer - game.dt);
     } else {
         self.updateHistory();
         self.history_timer = history_interval;
     }
 
     if (!self.is_hit) self.vel.y -= gravity;
-
-    const target_pos = self.pos.add(self.vel.scale(game.dt));
-    const target_rect = math.Rect.fromCenter(target_pos, size);
-    if (target_rect.overlaps(game.paddle.rect(game))) {
-        game.playSound(&assets.ball_reflect);
-
-        // TODO: Side collisions?
-        if (self.is_hit) {
-            self.vel.y *= -1;
-        } else {
-            self.is_hit = true;
-            self.vel = self.vel.scale(@sqrt(2.0));
-        }
-        self.pos = self.pos.add(self.vel.scale(game.dt));
-    } else {
-        self.pos = target_pos;
-    }
+    self.handleCollisions(game);
 
     if (!self.isVisible(game)) self.marked_for_delete = true;
 }
@@ -97,7 +81,7 @@ pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList
 }
 
 fn isVisible(self: *const Self, game: *const Game) bool {
-    const game_rect = math.Rect{ .min = Vec2.zero, .max = math.vec2Cast(f32, game.size) };
+    const game_rect = game.rect();
     const rect = math.Rect.fromCenter(self.pos, size);
     if (rect.overlaps(game_rect)) return true;
 
@@ -111,6 +95,49 @@ fn isVisible(self: *const Self, game: *const Game) bool {
     }
 
     return false;
+}
+
+fn handleCollisions(self: *Self, game: *Game) void {
+    const target_pos = self.pos.add(self.vel.scale(game.dt));
+    const target_rect = math.Rect.fromCenter(target_pos, size);
+    const paddle_rect = game.paddle.rect(game);
+
+    if (target_rect.overlaps(paddle_rect)) {
+        game.playSound(&assets.ball_reflect);
+
+        var speed = self.vel.length();
+        if (!self.is_hit) {
+            self.is_hit = true;
+            speed *= @sqrt(2.0);
+        }
+
+        self.vel.x = self.pos.x - game.paddle.center_x;
+        self.vel.y *= -1;
+        self.vel = self.vel.normalize().scale(speed);
+
+        self.pos = self.pos.add(self.vel.scale(game.dt));
+        return;
+    }
+
+    const game_rect = game.rect();
+    if (!target_rect.overlaps(game_rect)) {
+        var is_collision = false;
+        if (target_rect.max.y > game_rect.max.y) {
+            is_collision = true;
+            self.vel.y *= -1;
+        }
+
+        if (target_rect.min.x < game_rect.min.x or target_rect.max.x > game_rect.max.x) {
+            is_collision = true;
+            self.vel.x *= -1;
+        }
+
+        if (is_collision) game.playSound(&assets.ball_reflect);
+        self.pos = self.pos.add(self.vel.scale(game.dt));
+        return;
+    }
+
+    self.pos = target_pos;
 }
 
 fn updateHistory(self: *Self) void {

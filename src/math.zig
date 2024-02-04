@@ -3,9 +3,22 @@ const zlm = @import("zlm");
 const signed = zlm.SpecializeOn(i32);
 const unsigned = zlm.SpecializeOn(u32);
 
+pub const Line = struct {
+    from: zlm.Vec2,
+    to: zlm.Vec2,
+
+    pub fn new(from: zlm.Vec2, to: zlm.Vec2) Line {
+        return .{ .from = from, .to = to };
+    }
+};
+
 pub const Rect = struct {
     min: zlm.Vec2,
     max: zlm.Vec2,
+
+    pub fn new(min: zlm.Vec2, max: zlm.Vec2) Rect {
+        return .{ .min = min, .max = max };
+    }
 
     pub fn fromCenter(center: zlm.Vec2, size: zlm.Vec2) Rect {
         const half_size = size.scale(0.5);
@@ -19,7 +32,19 @@ pub const Rect = struct {
     pub fn overlaps(self: Rect, other: Rect) bool {
         return self.min.x < other.max.x and self.max.x > other.min.x and self.max.y > other.min.y and self.min.y < other.max.y;
     }
+
+    pub fn sides(self: Rect) [4]Line {
+        return .{
+            line(zlm.vec2(self.min.x, self.max.y), zlm.vec2(self.max.x, self.max.y)),
+            line(zlm.vec2(self.min.x, self.min.y), zlm.vec2(self.min.x, self.max.y)),
+            line(zlm.vec2(self.max.x, self.min.y), zlm.vec2(self.max.x, self.max.y)),
+            line(zlm.vec2(self.min.x, self.min.y), zlm.vec2(self.max.x, self.min.y)),
+        };
+    }
 };
+
+pub const line = Line.new;
+pub const rect = Rect.new;
 
 pub const Vec2i = signed.Vec2;
 pub const vec2i = signed.vec2;
