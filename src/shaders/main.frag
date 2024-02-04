@@ -52,18 +52,6 @@ vec3 hsv_to_rgb(vec3 in_hsv) {
     return vec3(r + m, g + m, b + m);
 }
 
-float gamma(float u) {
-    if (u <= 0.0031308) {
-        return 12.92 * u;
-    } else {
-        return (1.055 * pow(u, 1.0 / 2.4)) - 0.055;
-    }
-}
-
-vec3 rgb_to_srgb(vec3 c) {
-    return vec3(gamma(c.r), gamma(c.g), gamma(c.b));
-}
-
 void main() {
     vec2 pos = gl_FragCoord.xy / pc.viewport_size;
 
@@ -72,10 +60,10 @@ void main() {
             outColor = fragColor;
             break;
         case SHADING_RAINBOW:
-            outColor = vec4(rgb_to_srgb(hsv_to_rgb(vec3(pos.x * radians(360.0), 1.0, 1.0))), fragColor.a);
+            outColor = vec4(hsv_to_rgb(vec3(pos.x * radians(360.0), 1.0, 1.0)), fragColor.a);
             break;
         case SHADING_RAINBOW_SCROLL:
-            outColor = vec4(rgb_to_srgb(hsv_to_rgb(vec3(pos.x * radians(360.0) + pc.time, 1.0, 1.0))), fragColor.a);
+            outColor = vec4(hsv_to_rgb(vec3(pos.x * radians(360.0) + pc.time, 1.0, 1.0)), fragColor.a);
             break;
     }
 }
