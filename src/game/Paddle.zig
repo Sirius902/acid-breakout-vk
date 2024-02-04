@@ -12,13 +12,6 @@ const Self = @This();
 
 center_x: f32,
 game_relative_size: Vec2,
-was_touching_bounds: bool = false,
-
-// TODO: Move this to a common file.
-const Rect = struct {
-    min: Vec2,
-    max: Vec2,
-};
 
 pub fn init(game: *Game) Self {
     return .{
@@ -38,17 +31,16 @@ pub fn tick(self: *Self, game: *Game) void {
     }
 
     self.moveInBounds(game);
-
-    const is_touching_bounds = self.isTouchingBounds(game);
-    if (is_touching_bounds and !self.was_touching_bounds) {
-        game.playSound(&assets.ball_reflect);
-    }
-    self.was_touching_bounds = is_touching_bounds;
 }
 
 pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList.Error!void {
     const r = self.rect(game);
     try draw_list.addRect(.{ .min = r.min, .max = r.max });
+}
+
+pub fn rect(self: *const Self, game: *const Game) math.Rect {
+    const size_f = math.vec2Cast(f32, self.size(game));
+    return math.Rect.fromCenter(vec2(self.center_x, centerY(game)), size_f);
 }
 
 fn size(self: *const Self, game: *const Game) Vec2u {
@@ -58,15 +50,6 @@ fn size(self: *const Self, game: *const Game) Vec2u {
 
 fn center(self: *const Self, game: *const Game) Vec2 {
     return vec2(self.center_x, centerY(game));
-}
-
-fn rect(self: *const Self, game: *const Game) Rect {
-    const size_f = math.vec2Cast(f32, self.size(game));
-    const center_y = centerY(game);
-    return .{
-        .min = vec2(self.center_x - size_f.x * 0.5, center_y - size_f.y * 0.5),
-        .max = vec2(self.center_x + size_f.x * 0.5, center_y + size_f.y * 0.5),
-    };
 }
 
 fn moveInBounds(self: *Self, game: *const Game) void {

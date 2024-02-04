@@ -133,12 +133,19 @@ pub fn main() !void {
     );
     defer destroyCommandBuffers(gc, pool, allocator, cmdbufs);
 
-    var vertex_buffers = try allocator.alloc(?Buffer, swapchain.swap_images.len);
+    var vertex_buffers = try allocator.alloc(?Buffer(Vertex), swapchain.swap_images.len);
     defer {
         for (vertex_buffers) |*vb_opt| if (vb_opt.*) |*vb| vb.deinit(gc);
         allocator.free(vertex_buffers);
     }
     @memset(vertex_buffers, null);
+
+    var index_buffers = try allocator.alloc(?Buffer(u16), swapchain.swap_images.len);
+    defer {
+        for (index_buffers) |*ib_opt| if (ib_opt.*) |*ib| ib.deinit(gc);
+        allocator.free(index_buffers);
+    }
+    @memset(index_buffers, null);
 
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
@@ -227,31 +234,49 @@ pub fn main() !void {
         draw_list.clear();
         try game.draw(&draw_list);
 
-        const vertices = try executeDrawList(&draw_list, &game, allocator);
-        defer allocator.free(vertices);
+        var draw_data = try executeDrawList(&draw_list, &game, allocator);
+        defer draw_data.deinit();
+        const vertices = draw_data.rect_vertices.items;
+        const indices = draw_data.rect_indices.items;
 
+        // TODO: Store Rect vertex data and index data in the same buffer.
         const vertex_buffer_opt = &vertex_buffers[swapchain.image_index];
         if (vertex_buffer_opt.*) |*vb| {
-            const size: vk.DeviceSize = @intCast(vertices.len * @sizeOf(Vertex));
-            if (vb.info.size < size) {
-                vb.deinit(gc);
-                vertex_buffer_opt.* = null;
-            }
+            try vb.ensureTotalCapacity(gc, vertices.len);
+        } else {
+            vertex_buffer_opt.* = try Buffer(Vertex).init(gc, vertices.len, .{
+                .usage = .{
+                    .transfer_dst_bit = true,
+                    .vertex_buffer_bit = true,
+                },
+                .sharing_mode = .exclusive,
+            });
         }
-        if (vertex_buffer_opt.* == null) {
-            vertex_buffer_opt.* = try Buffer.init(gc, .{ .size = @intCast(vertices.len * @sizeOf(Vertex)) });
-        }
-        const vb = &vertex_buffer_opt.*.?;
+        const vertex_buffer = &vertex_buffer_opt.*.?;
+        try vertex_buffer.upload(gc, pool, vertices);
 
-        try uploadVertices(gc, pool, vb.handle, vertices);
+        const index_buffer_opt = &index_buffers[swapchain.image_index];
+        if (index_buffer_opt.*) |*ib| {
+            try ib.ensureTotalCapacity(gc, indices.len);
+        } else {
+            index_buffer_opt.* = try Buffer(u16).init(gc, indices.len, .{
+                .usage = .{
+                    .transfer_dst_bit = true,
+                    .index_buffer_bit = true,
+                },
+                .sharing_mode = .exclusive,
+            });
+        }
+        const index_buffer = &index_buffer_opt.*.?;
+        try index_buffer.upload(gc, pool, indices);
 
         const cmdbuf = cmdbufs[swapchain.image_index];
         const current_image = try swapchain.acquireImage();
         try recordCommandBuffer(
             gc,
             &ic,
-            vertices,
-            vb.handle,
+            vertex_buffer,
+            index_buffer,
             swapchain.extent,
             render_pass,
             pipeline,
@@ -297,45 +322,103 @@ fn glfwErrorCallback(error_code: c_int, description: [*c]const u8) callconv(.C) 
     std.log.err("GLFW error {}: {s}", .{ error_code, description });
 }
 
-const BufferInfo = struct {
-    size: vk.DeviceSize,
-    is_host_writable: bool = false,
-};
+fn Buffer(comptime T: type) type {
+    return struct {
+        handle: vk.Buffer,
+        memory: vk.DeviceMemory,
+        capacity: vk.DeviceSize,
+        len: vk.DeviceSize,
+        info: Info,
 
-const Buffer = struct {
-    handle: vk.Buffer,
-    memory: vk.DeviceMemory,
-    info: BufferInfo,
+        const Self = @This();
 
-    pub fn init(gc: *const GraphicsContext, info: BufferInfo) !Buffer {
-        const handle = try gc.vkd.createBuffer(gc.dev, &.{
-            .size = info.size,
-            .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
-            .sharing_mode = .exclusive,
-        }, null);
-        errdefer gc.vkd.destroyBuffer(gc.dev, handle, null);
-        const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, handle);
-        const memory = try gc.allocate(mem_reqs, .{
-            .device_local_bit = !info.is_host_writable,
-            .host_visible_bit = info.is_host_writable,
-            .host_coherent_bit = info.is_host_writable,
-        });
-        errdefer gc.vkd.freeMemory(gc.dev, memory, null);
-        try gc.vkd.bindBufferMemory(gc.dev, handle, memory, 0);
+        const Info = struct {
+            usage: vk.BufferUsageFlags,
+            sharing_mode: vk.SharingMode,
+        };
 
-        return .{ .handle = handle, .memory = memory, .info = info };
+        pub fn init(gc: *const GraphicsContext, capacity: vk.DeviceSize, info: Info) !Self {
+            const handle = try gc.vkd.createBuffer(gc.dev, &.{
+                .size = capacity * @sizeOf(T),
+                .usage = info.usage,
+                .sharing_mode = info.sharing_mode,
+            }, null);
+            errdefer gc.vkd.destroyBuffer(gc.dev, handle, null);
+            const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, handle);
+            const memory = try gc.allocate(mem_reqs, .{ .device_local_bit = true });
+            errdefer gc.vkd.freeMemory(gc.dev, memory, null);
+            try gc.vkd.bindBufferMemory(gc.dev, handle, memory, 0);
+
+            return .{ .handle = handle, .memory = memory, .capacity = capacity, .len = 0, .info = info };
+        }
+
+        pub fn deinit(self: *Self, gc: *const GraphicsContext) void {
+            gc.vkd.freeMemory(gc.dev, self.memory, null);
+            gc.vkd.destroyBuffer(gc.dev, self.handle, null);
+        }
+
+        pub fn upload(
+            self: *Self,
+            gc: *const GraphicsContext,
+            pool: vk.CommandPool,
+            data: []const T,
+        ) !void {
+            std.debug.assert(self.capacity >= data.len);
+
+            const data_size = data.len * @sizeOf(T);
+            const staging_buffer = try gc.vkd.createBuffer(gc.dev, &.{
+                .size = data_size,
+                .usage = .{ .transfer_src_bit = true },
+                .sharing_mode = .exclusive,
+            }, null);
+            defer gc.vkd.destroyBuffer(gc.dev, staging_buffer, null);
+            const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, staging_buffer);
+            const staging_memory = try gc.allocate(mem_reqs, .{ .host_visible_bit = true, .host_coherent_bit = true });
+            defer gc.vkd.freeMemory(gc.dev, staging_memory, null);
+            try gc.vkd.bindBufferMemory(gc.dev, staging_buffer, staging_memory, 0);
+
+            {
+                const gpu_memory = try gc.vkd.mapMemory(gc.dev, staging_memory, 0, vk.WHOLE_SIZE, .{});
+                defer gc.vkd.unmapMemory(gc.dev, staging_memory);
+
+                const gpu_data: [*]T = @ptrCast(@alignCast(gpu_memory));
+                @memcpy(gpu_data, data);
+            }
+
+            try copyBuffer(gc, pool, self.handle, staging_buffer, data_size);
+            self.len = data.len;
+        }
+
+        pub fn ensureTotalCapacity(self: *Self, gc: *const GraphicsContext, capacity: usize) !void {
+            if (self.capacity < capacity) {
+                var old = self.*;
+                self.* = try Self.init(gc, capacity, self.info);
+                old.deinit(gc);
+            }
+        }
+    };
+}
+
+const DrawData = struct {
+    rect_vertices: std.ArrayList(Vertex),
+    rect_indices: std.ArrayList(u16),
+
+    pub fn init(allocator: Allocator) DrawData {
+        return .{
+            .rect_vertices = std.ArrayList(Vertex).init(allocator),
+            .rect_indices = std.ArrayList(u16).init(allocator),
+        };
     }
 
-    pub fn deinit(self: *Buffer, gc: *const GraphicsContext) void {
-        gc.vkd.freeMemory(gc.dev, self.memory, null);
-        gc.vkd.destroyBuffer(gc.dev, self.handle, null);
+    pub fn deinit(self: *DrawData) void {
+        self.rect_vertices.deinit();
+        self.rect_indices.deinit();
     }
 };
 
-// TODO: Instancing.
-fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: Allocator) ![]Vertex {
-    var vertices = std.ArrayList(Vertex).init(allocator);
-    errdefer vertices.deinit();
+fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: Allocator) !DrawData {
+    var draw_data = DrawData.init(allocator);
+    errdefer draw_data.deinit();
 
     const game_size = math.vec2Cast(f32, game.size);
     // Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
@@ -348,21 +431,23 @@ fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: All
             const min = point.pos.sub(point_size.scale(0.5));
             const max = point.pos.add(point_size.scale(0.5));
 
-            var point_verts = [_]Vertex{
+            var rect_verts = [_]Vertex{
                 .{ .pos = min, .color = vec3(1, 0, 0) },
                 .{ .pos = max, .color = vec3(0, 1, 0) },
                 .{ .pos = vec2(min.x, max.y), .color = vec3(0, 0, 1) },
-                .{ .pos = min, .color = vec3(1, 0, 0) },
                 .{ .pos = vec2(max.x, min.y), .color = vec3(0.25, 0, 1) },
-                .{ .pos = max, .color = vec3(0, 1, 0) },
             };
-            for (&point_verts) |*v| {
+            for (&rect_verts) |*v| {
                 var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
                 pos = pos.transform(model);
                 v.pos = vec2(pos.x, pos.y);
             }
 
-            try vertices.appendSlice(&point_verts);
+            var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
+            for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
+
+            try draw_data.rect_vertices.appendSlice(&rect_verts);
+            try draw_data.rect_indices.appendSlice(&rect_indices);
         }
     }
 
@@ -372,31 +457,11 @@ fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: All
         const min = point.pos.sub(point_size.scale(0.5));
         const max = point.pos.add(point_size.scale(0.5));
 
-        var point_verts = [_]Vertex{
+        var rect_verts = [_]Vertex{
             .{ .pos = min, .color = vec3(1, 0, 0) },
             .{ .pos = max, .color = vec3(0, 1, 0) },
             .{ .pos = vec2(min.x, max.y), .color = vec3(0, 0, 1) },
-            .{ .pos = min, .color = vec3(1, 0, 0) },
             .{ .pos = vec2(max.x, min.y), .color = vec3(0.25, 0, 1) },
-            .{ .pos = max, .color = vec3(0, 1, 0) },
-        };
-        for (&point_verts) |*v| {
-            var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
-            pos = pos.transform(model);
-            v.pos = vec2(pos.x, pos.y);
-        }
-
-        try vertices.appendSlice(&point_verts);
-    }
-
-    for (draw_list.rects.items) |rect| {
-        var rect_verts = [_]Vertex{
-            .{ .pos = rect.min, .color = vec3(1, 0, 0) },
-            .{ .pos = rect.max, .color = vec3(0, 1, 0) },
-            .{ .pos = vec2(rect.min.x, rect.max.y), .color = vec3(0, 0, 1) },
-            .{ .pos = rect.min, .color = vec3(1, 0, 0) },
-            .{ .pos = vec2(rect.max.x, rect.min.y), .color = vec3(0.25, 0, 1) },
-            .{ .pos = rect.max, .color = vec3(0, 1, 0) },
         };
         for (&rect_verts) |*v| {
             var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
@@ -404,40 +469,34 @@ fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: All
             v.pos = vec2(pos.x, pos.y);
         }
 
-        try vertices.appendSlice(&rect_verts);
+        var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
+        for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
+
+        try draw_data.rect_vertices.appendSlice(&rect_verts);
+        try draw_data.rect_indices.appendSlice(&rect_indices);
     }
 
-    return try vertices.toOwnedSlice();
-}
+    for (draw_list.rects.items) |rect| {
+        var rect_verts = [_]Vertex{
+            .{ .pos = rect.min, .color = vec3(1, 0, 0) },
+            .{ .pos = rect.max, .color = vec3(0, 1, 0) },
+            .{ .pos = vec2(rect.min.x, rect.max.y), .color = vec3(0, 0, 1) },
+            .{ .pos = vec2(rect.max.x, rect.min.y), .color = vec3(0.25, 0, 1) },
+        };
+        for (&rect_verts) |*v| {
+            var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
+            pos = pos.transform(model);
+            v.pos = vec2(pos.x, pos.y);
+        }
 
-fn uploadVertices(
-    gc: *const GraphicsContext,
-    pool: vk.CommandPool,
-    buffer: vk.Buffer,
-    vertices: []const Vertex,
-) !void {
-    const vertex_data_size = vertices.len * @sizeOf(Vertex);
+        var rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
+        for (&rect_indices) |*i| i.* += @intCast(draw_data.rect_vertices.items.len);
 
-    const staging_buffer = try gc.vkd.createBuffer(gc.dev, &.{
-        .size = vertex_data_size,
-        .usage = .{ .transfer_src_bit = true },
-        .sharing_mode = .exclusive,
-    }, null);
-    defer gc.vkd.destroyBuffer(gc.dev, staging_buffer, null);
-    const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, staging_buffer);
-    const staging_memory = try gc.allocate(mem_reqs, .{ .host_visible_bit = true, .host_coherent_bit = true });
-    defer gc.vkd.freeMemory(gc.dev, staging_memory, null);
-    try gc.vkd.bindBufferMemory(gc.dev, staging_buffer, staging_memory, 0);
-
-    {
-        const data = try gc.vkd.mapMemory(gc.dev, staging_memory, 0, vk.WHOLE_SIZE, .{});
-        defer gc.vkd.unmapMemory(gc.dev, staging_memory);
-
-        const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data));
-        @memcpy(gpu_vertices, vertices);
+        try draw_data.rect_vertices.appendSlice(&rect_verts);
+        try draw_data.rect_indices.appendSlice(&rect_indices);
     }
 
-    try copyBuffer(gc, pool, buffer, staging_buffer, vertex_data_size);
+    return draw_data;
 }
 
 fn copyBuffer(gc: *const GraphicsContext, pool: vk.CommandPool, dst: vk.Buffer, src: vk.Buffer, size: vk.DeviceSize) !void {
@@ -498,8 +557,8 @@ fn destroyCommandBuffers(gc: *const GraphicsContext, pool: vk.CommandPool, alloc
 fn recordCommandBuffer(
     gc: *const GraphicsContext,
     ic: *const ImGuiContext,
-    vertices: []const Vertex,
-    buffer: vk.Buffer,
+    vertex_buffer: *const Buffer(Vertex),
+    index_buffer: *const Buffer(u16),
     extent: vk.Extent2D,
     render_pass: vk.RenderPass,
     pipeline: vk.Pipeline,
@@ -547,9 +606,10 @@ fn recordCommandBuffer(
     }, .@"inline");
 
     gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipeline);
-    const offset = [_]vk.DeviceSize{0};
-    gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&buffer), &offset);
-    gc.vkd.cmdDraw(cmdbuf, @intCast(vertices.len), 1, 0, 0);
+    const offsets = [_]vk.DeviceSize{0};
+    gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&vertex_buffer.handle), &offsets);
+    gc.vkd.cmdBindIndexBuffer(cmdbuf, index_buffer.handle, 0, .uint16);
+    gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(index_buffer.len), 1, 0, 0, 0);
 
     ic.drawTexture(cmdbuf);
 

@@ -95,6 +95,10 @@ pub const Game = struct {
 
             var ball = &n.data;
             ball.tick(self);
+            if (ball.marked_for_delete) {
+                self.balls.remove(n);
+                self.allocator.destroy(n);
+            }
         }
 
         return .{ .sound_list = self.sound_list.items };

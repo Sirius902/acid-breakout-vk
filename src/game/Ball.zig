@@ -19,13 +19,15 @@ delay: f32,
 history_timer: f32,
 pos_history: PosHistory,
 pos_history_nodes: [history_max_len]PosHistory.Node,
+is_hit: bool,
+marked_for_delete: bool,
 
 const PosHistory = std.DoublyLinkedList(Vec2);
 
-const gravity = 1;
+const gravity = 1.25;
 const size = vec2(1, 1);
 const history_max_len = 16;
-const history_interval = @as(f32, 1) / history_max_len;
+const history_interval = @as(f32, 0.25) / history_max_len;
 
 pub fn init(game: *Game, is_first: bool) Self {
     return .{
@@ -35,6 +37,8 @@ pub fn init(game: *Game, is_first: bool) Self {
         .history_timer = 0,
         .pos_history = .{},
         .pos_history_nodes = undefined,
+        .is_hit = false,
+        .marked_for_delete = false,
     };
 }
 
@@ -56,8 +60,26 @@ pub fn tick(self: *Self, game: *Game) void {
         self.history_timer = history_interval;
     }
 
-    self.vel.y -= gravity;
-    self.pos = self.pos.add(self.vel.scale(game.dt));
+    if (!self.is_hit) self.vel.y -= gravity;
+
+    const target_pos = self.pos.add(self.vel.scale(game.dt));
+    const target_rect = math.Rect.fromCenter(target_pos, size);
+    if (target_rect.overlaps(game.paddle.rect(game))) {
+        game.playSound(&assets.ball_reflect);
+
+        // TODO: Side collisions?
+        if (self.is_hit) {
+            self.vel.y *= -1;
+        } else {
+            self.is_hit = true;
+            self.vel = self.vel.scale(@sqrt(2.0));
+        }
+        self.pos = self.pos.add(self.vel.scale(game.dt));
+    } else {
+        self.pos = target_pos;
+    }
+
+    if (!self.isVisible(game)) self.marked_for_delete = true;
 }
 
 pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList.Error!void {
@@ -72,6 +94,23 @@ pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList
     }
 
     try draw_list.addPoint(.{ .pos = self.pos });
+}
+
+fn isVisible(self: *const Self, game: *const Game) bool {
+    const game_rect = math.Rect{ .min = Vec2.zero, .max = math.vec2Cast(f32, game.size) };
+    const rect = math.Rect.fromCenter(self.pos, size);
+    if (rect.overlaps(game_rect)) return true;
+
+    var node = self.pos_history.first;
+    while (node) |n| {
+        const next = n.next;
+        defer node = next;
+
+        const history_rect = math.Rect.fromCenter(n.data, size);
+        if (history_rect.overlaps(game_rect)) return true;
+    }
+
+    return false;
 }
 
 fn updateHistory(self: *Self) void {
