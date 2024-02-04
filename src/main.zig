@@ -133,6 +133,13 @@ pub fn main() !void {
     );
     defer destroyCommandBuffers(gc, pool, allocator, cmdbufs);
 
+    var vertex_buffers = try allocator.alloc(?Buffer, swapchain.swap_images.len);
+    defer {
+        for (vertex_buffers) |*vb_opt| if (vb_opt.*) |*vb| vb.deinit(gc);
+        allocator.free(vertex_buffers);
+    }
+    @memset(vertex_buffers, null);
+
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
 
@@ -223,22 +230,20 @@ pub fn main() !void {
         const vertices = try executeDrawList(&draw_list, &game, allocator);
         defer allocator.free(vertices);
 
-        // TODO: Reuse same buffer if it will fit data, if not then recreate.
-        // TODO: Create a vertex, index, and uniform buffer for each frame in flight.
-        const buffer = try gc.vkd.createBuffer(gc.dev, &.{
-            .size = vertices.len * @sizeOf(Vertex),
-            .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
-            .sharing_mode = .exclusive,
-        }, null);
-        // TODO: Destroy it lmao.
-        // defer gc.vkd.destroyBuffer(gc.dev, buffer, null);
-        const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, buffer);
-        const memory = try gc.allocate(mem_reqs, .{ .device_local_bit = true });
-        // TODO: Free it lmao.
-        // defer gc.vkd.freeMemory(gc.dev, memory, null);
-        try gc.vkd.bindBufferMemory(gc.dev, buffer, memory, 0);
+        const vertex_buffer_opt = &vertex_buffers[swapchain.image_index];
+        if (vertex_buffer_opt.*) |*vb| {
+            const size: vk.DeviceSize = @intCast(vertices.len * @sizeOf(Vertex));
+            if (vb.info.size < size) {
+                vb.deinit(gc);
+                vertex_buffer_opt.* = null;
+            }
+        }
+        if (vertex_buffer_opt.* == null) {
+            vertex_buffer_opt.* = try Buffer.init(gc, .{ .size = @intCast(vertices.len * @sizeOf(Vertex)) });
+        }
+        const vb = &vertex_buffer_opt.*.?;
 
-        try uploadVertices(gc, pool, buffer, vertices);
+        try uploadVertices(gc, pool, vb.handle, vertices);
 
         const cmdbuf = cmdbufs[swapchain.image_index];
         const current_image = try swapchain.acquireImage();
@@ -246,7 +251,7 @@ pub fn main() !void {
             gc,
             &ic,
             vertices,
-            buffer,
+            vb.handle,
             swapchain.extent,
             render_pass,
             pipeline,
@@ -291,6 +296,41 @@ pub fn main() !void {
 fn glfwErrorCallback(error_code: c_int, description: [*c]const u8) callconv(.C) void {
     std.log.err("GLFW error {}: {s}", .{ error_code, description });
 }
+
+const BufferInfo = struct {
+    size: vk.DeviceSize,
+    is_host_writable: bool = false,
+};
+
+const Buffer = struct {
+    handle: vk.Buffer,
+    memory: vk.DeviceMemory,
+    info: BufferInfo,
+
+    pub fn init(gc: *const GraphicsContext, info: BufferInfo) !Buffer {
+        const handle = try gc.vkd.createBuffer(gc.dev, &.{
+            .size = info.size,
+            .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+            .sharing_mode = .exclusive,
+        }, null);
+        errdefer gc.vkd.destroyBuffer(gc.dev, handle, null);
+        const mem_reqs = gc.vkd.getBufferMemoryRequirements(gc.dev, handle);
+        const memory = try gc.allocate(mem_reqs, .{
+            .device_local_bit = !info.is_host_writable,
+            .host_visible_bit = info.is_host_writable,
+            .host_coherent_bit = info.is_host_writable,
+        });
+        errdefer gc.vkd.freeMemory(gc.dev, memory, null);
+        try gc.vkd.bindBufferMemory(gc.dev, handle, memory, 0);
+
+        return .{ .handle = handle, .memory = memory, .info = info };
+    }
+
+    pub fn deinit(self: *Buffer, gc: *const GraphicsContext) void {
+        gc.vkd.freeMemory(gc.dev, self.memory, null);
+        gc.vkd.destroyBuffer(gc.dev, self.handle, null);
+    }
+};
 
 // TODO: Instancing.
 fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: Allocator) ![]Vertex {
