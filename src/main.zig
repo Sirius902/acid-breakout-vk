@@ -138,7 +138,7 @@ pub fn main() !void {
 
     try ac.cacheSound(&assets.ball_reflect);
 
-    var game = Game.init(vec2u(extent.width, extent.height), allocator);
+    var game = try Game.init(vec2u(extent.width, extent.height), allocator);
     defer game.deinit();
 
     var draw_list = DrawList.init(allocator);
@@ -297,12 +297,57 @@ fn executeDrawList(draw_list: *const DrawList, game: *const Game, allocator: All
     var vertices = std.ArrayList(Vertex).init(allocator);
     errdefer vertices.deinit();
 
-    const size = math.vec2Cast(f32, game.size);
+    const game_size = math.vec2Cast(f32, game.size);
     // Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
-    const model = zlm.Mat4.createOrthogonal(0, size.x, size.y, 0, 0.01, 1);
+    const model = zlm.Mat4.createOrthogonal(0, game_size.x, game_size.y, 0, 0.01, 1);
 
-    if (draw_list.lines.items.len > 0) @panic("Not implemented");
-    if (draw_list.points.items.len > 0) @panic("Not implemented");
+    // TODO: Use lines topology with separate pipeline.
+    for (draw_list.lines.items) |line| {
+        for (line.points) |point| {
+            const point_size = Vec2.one.scale(2);
+            const min = point.pos.sub(point_size.scale(0.5));
+            const max = point.pos.add(point_size.scale(0.5));
+
+            var point_verts = [_]Vertex{
+                .{ .pos = min, .color = vec3(1, 0, 0) },
+                .{ .pos = max, .color = vec3(0, 1, 0) },
+                .{ .pos = vec2(min.x, max.y), .color = vec3(0, 0, 1) },
+                .{ .pos = min, .color = vec3(1, 0, 0) },
+                .{ .pos = vec2(max.x, min.y), .color = vec3(0.25, 0, 1) },
+                .{ .pos = max, .color = vec3(0, 1, 0) },
+            };
+            for (&point_verts) |*v| {
+                var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
+                pos = pos.transform(model);
+                v.pos = vec2(pos.x, pos.y);
+            }
+
+            try vertices.appendSlice(&point_verts);
+        }
+    }
+
+    // TODO: Use points topology with separate pipeline.
+    for (draw_list.points.items) |point| {
+        const point_size = Vec2.one.scale(2);
+        const min = point.pos.sub(point_size.scale(0.5));
+        const max = point.pos.add(point_size.scale(0.5));
+
+        var point_verts = [_]Vertex{
+            .{ .pos = min, .color = vec3(1, 0, 0) },
+            .{ .pos = max, .color = vec3(0, 1, 0) },
+            .{ .pos = vec2(min.x, max.y), .color = vec3(0, 0, 1) },
+            .{ .pos = min, .color = vec3(1, 0, 0) },
+            .{ .pos = vec2(max.x, min.y), .color = vec3(0.25, 0, 1) },
+            .{ .pos = max, .color = vec3(0, 1, 0) },
+        };
+        for (&point_verts) |*v| {
+            var pos = zlm.vec4(v.pos.x, v.pos.y, 0, 1);
+            pos = pos.transform(model);
+            v.pos = vec2(pos.x, pos.y);
+        }
+
+        try vertices.appendSlice(&point_verts);
+    }
 
     for (draw_list.rects.items) |rect| {
         var rect_verts = [_]Vertex{

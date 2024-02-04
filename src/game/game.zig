@@ -3,10 +3,13 @@ const assets = @import("assets");
 const math = @import("../math.zig");
 const Sound = assets.Sound;
 const Paddle = @import("Paddle.zig");
+const Ball = @import("Ball.zig");
 const Vec2i = math.Vec2i;
 const Vec2u = math.Vec2u;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+
+const Prng = std.rand.DefaultPrng;
 
 pub const log = std.log.scoped(.game);
 
@@ -19,9 +22,9 @@ pub const TickResult = struct {
 pub const Game = struct {
     allocator: Allocator,
     tick_arena: ArenaAllocator,
-    /// The ratio of the current frame time over the target frame time.
-    dt: f64,
-    avg_ticktime_s: f64,
+    /// The time elapsed from the previous tick to the current tick in seconds.
+    dt: f32,
+    avg_dt: f64,
     // TODO: Gamepad input.
     /// Last known mouse position within the game window.
     mouse_pos: ?Vec2u,
@@ -29,23 +32,35 @@ pub const Game = struct {
     cursor_delta: Vec2i,
     size: Vec2u,
     paddle: Paddle,
+    // TODO: Allocate balls in arena?
+    balls: BallList,
     sound_list: std.ArrayList(*const Sound.Hash),
+    prng: Prng,
 
-    pub const target_ticktime = 1.0 / 60.0 * std.time.ns_per_s;
+    pub const target_dt = 1.0 / 60.0 * std.time.ns_per_s;
 
-    pub fn init(size: Vec2u, allocator: Allocator) Game {
+    const BallList = std.DoublyLinkedList(Ball);
+
+    pub fn init(size: Vec2u, allocator: Allocator) !Game {
         var self: Game = .{
             .allocator = allocator,
             .tick_arena = ArenaAllocator.init(allocator),
-            .dt = 1.0,
-            .avg_ticktime_s = @as(f64, target_ticktime) / std.time.ns_per_s,
+            .dt = @as(f32, target_dt) / std.time.ns_per_s,
+            .avg_dt = @as(f64, target_dt) / std.time.ns_per_s,
             .mouse_pos = null,
             .cursor_delta = Vec2i.zero,
             .size = size,
             .paddle = undefined,
+            .balls = .{},
             .sound_list = std.ArrayList(*const Sound.Hash).init(allocator),
+            .prng = Prng.init(0xDEADBEEFC0FFEE),
         };
         self.paddle = Paddle.init(&self);
+
+        const ball_node = try allocator.create(BallList.Node);
+        errdefer allocator.destroy(ball_node);
+        ball_node.data = Ball.init(&self, true);
+        self.balls.append(ball_node);
 
         return self;
     }
@@ -53,6 +68,8 @@ pub const Game = struct {
     pub fn deinit(self: *Game) void {
         self.tick_arena.deinit();
         self.sound_list.deinit();
+
+        while (self.balls.pop()) |node| self.allocator.destroy(node);
         self.paddle.deinit(self);
     }
 
@@ -63,19 +80,36 @@ pub const Game = struct {
         _ = self.tick_arena.reset(.retain_capacity);
         self.sound_list.clearRetainingCapacity();
 
-        const ticktime_flt = @as(f64, @floatFromInt(ticktime));
-        self.dt = ticktime_flt / target_ticktime;
+        const ticktime_f = @as(f64, @floatFromInt(ticktime));
+        self.dt = @floatCast(ticktime_f / std.time.ns_per_s);
 
         const alpha = 0.2;
-        const ticktime_s = ticktime_flt / std.time.ns_per_s;
-        self.avg_ticktime_s = alpha * ticktime_s + (1 - alpha) * self.avg_ticktime_s;
+        self.avg_dt = alpha * self.dt + (1 - alpha) * self.avg_dt;
 
         self.paddle.tick(self);
+
+        var ball_node = self.balls.first;
+        while (ball_node) |n| {
+            const next = n.next;
+            defer ball_node = next;
+
+            var ball = &n.data;
+            ball.tick(self);
+        }
 
         return .{ .sound_list = self.sound_list.items };
     }
 
     pub fn draw(self: *const Game, draw_list: *DrawList) DrawList.Error!void {
+        var ball_node = self.balls.first;
+        while (ball_node) |n| {
+            const next = n.next;
+            defer ball_node = next;
+
+            var ball = &n.data;
+            try ball.draw(self, draw_list);
+        }
+
         try self.paddle.draw(self, draw_list);
     }
 
@@ -100,8 +134,12 @@ pub const Game = struct {
         };
     }
 
+    pub fn random(self: *Game) std.rand.Random {
+        return self.prng.random();
+    }
+
     /// Returns the game's average ticks per second.
     pub fn averageTps(self: *const Game) f64 {
-        return 1.0 / self.avg_ticktime_s;
+        return 1.0 / self.avg_dt;
     }
 };
