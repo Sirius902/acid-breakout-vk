@@ -6,16 +6,13 @@ const Game = @import("game.zig").Game;
 const DrawList = @import("game.zig").DrawList;
 const Vec2 = zlm.Vec2;
 const vec2 = zlm.vec2;
-const Vec2i = math.Vec2i;
-const vec2i = math.vec2i;
 const Vec2u = math.Vec2u;
-const vec2u = math.vec2u;
+
+const Self = @This();
 
 center_x: f32,
 game_relative_size: Vec2,
 was_touching_bounds: bool = false,
-
-const Self = @This();
 
 // TODO: Move this to a common file.
 const Rect = struct {
