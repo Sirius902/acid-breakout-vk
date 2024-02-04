@@ -24,7 +24,7 @@ marked_for_delete: bool,
 
 const PosHistory = std.DoublyLinkedList(Vec2);
 
-const gravity = 20;
+const gravity = 60;
 const size = vec2(1, 1);
 const history_max_len = 8;
 const history_interval = @as(f32, 0.5) / history_max_len;
