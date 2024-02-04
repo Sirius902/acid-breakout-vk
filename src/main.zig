@@ -618,7 +618,7 @@ fn recordCommandBuffer(
         // TODO: Maintain game aspect ratio and use game size.
         .viewport_size = vec2(@floatFromInt(extent.width), @floatFromInt(extent.height)),
         .time = game.time,
-        .shading = .rainbow,
+        .shading = .rainbow_scroll,
     };
 
     gc.vkd.cmdBeginRenderPass(cmdbuf, &.{
