@@ -62,13 +62,71 @@ const PushConstants = extern struct {
     shading: Shading,
 };
 
-var is_demo_open = false;
-var is_config_open = true;
+const Config = struct {
+    wait_for_vsync: bool = true,
 
-var graphics_outdated = false;
-var wait_for_vsync = true;
+    pub const file_name = "acid-breakout.json";
+
+    pub fn loadOrDefault(dir: *std.fs.Dir, allocator: Allocator) Config {
+        var file = dir.openFile(file_name, .{}) catch |err| {
+            switch (err) {
+                error.FileNotFound => std.log.info("{s} not found, using default config", .{file_name}),
+                else => std.log.err("Failed to open {s} with {}, using default config", .{ file_name, err }),
+            }
+            return .{};
+        };
+        defer file.close();
+
+        var json_reader = std.json.reader(allocator, file.reader());
+        defer json_reader.deinit();
+
+        const parsed = std.json.parseFromTokenSource(Config, allocator, &json_reader, .{}) catch |err| {
+            std.log.err("Expected parsing {s} as JSON to succeed, but got: {}", .{ file_name, err });
+            return .{};
+        };
+        defer parsed.deinit();
+        std.log.info("Loaded config from {s}", .{file_name});
+        return parsed.value;
+    }
+
+    pub fn trySave(self: Config, dir: *std.fs.Dir) void {
+        var file = dir.createFile(file_name, .{}) catch |err| {
+            std.log.err("Failed to open {s} for writing: {}", .{ file_name, err });
+            return;
+        };
+        defer file.close();
+
+        var json_writer = std.json.writeStream(file.writer(), .{ .whitespace = .indent_2 });
+        json_writer.write(self) catch |err| {
+            std.log.err("Failed to write config as JSON: {}", .{err});
+        };
+    }
+};
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const exe_dir_path = std.fs.selfExeDirPathAlloc(allocator) catch |err| blk: {
+        std.log.err("Failed to get exe dir path: {}", .{err});
+        break :blk null;
+    };
+    defer if (exe_dir_path) |path| allocator.free(path);
+
+    var exe_dir = if (exe_dir_path) |path| std.fs.openDirAbsolute(path, .{}) catch |err| blk: {
+        std.log.err("Failed to open exe dir: {}", .{err});
+        break :blk null;
+    } else null;
+    defer if (exe_dir) |*dir| dir.close();
+
+    var config: Config = if (exe_dir) |*dir|
+        Config.loadOrDefault(dir, allocator)
+    else blk: {
+        std.log.err("Expected exe dir path to exist when loading config", .{});
+        break :blk .{};
+    };
+
     if (c.glfwInit() != c.GLFW_TRUE) return error.GlfwInitFailed;
     defer c.glfwTerminate();
 
@@ -91,14 +149,10 @@ pub fn main() !void {
     ) orelse return error.WindowInitFailed;
     defer c.glfwDestroyWindow(window);
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
     const gc = try GraphicsContext.init(allocator, app_name, window);
     defer gc.deinit();
 
-    var swapchain = try Swapchain.init(gc, allocator, extent, wait_for_vsync);
+    var swapchain = try Swapchain.init(gc, allocator, extent, config.wait_for_vsync);
     defer swapchain.deinit();
 
     const push_contant_range = vk.PushConstantRange{
@@ -119,14 +173,15 @@ pub fn main() !void {
     const render_pass = try createRenderPass(gc, swapchain);
     defer gc.vkd.destroyRenderPass(gc.dev, render_pass, null);
 
-    const imgui_ini_path = blk: {
-        const exe_dir = try std.fs.selfExeDirPathAlloc(allocator);
-        defer allocator.free(exe_dir);
-
-        break :blk try std.fs.path.joinZ(
+    const imgui_ini_name = "imgui.ini";
+    const imgui_ini_path = if (exe_dir_path) |path|
+        try std.fs.path.joinZ(
             allocator,
-            &[_][]const u8{ exe_dir, "imgui.ini" },
-        );
+            &[_][]const u8{ path, imgui_ini_name },
+        )
+    else blk: {
+        std.log.err("Expected exe dir path to exist when making ImGui ini path", .{});
+        break :blk imgui_ini_name;
     };
     defer allocator.free(imgui_ini_path);
 
@@ -177,6 +232,10 @@ pub fn main() !void {
 
     var draw_list = DrawList.init(allocator);
     defer draw_list.deinit();
+
+    var is_demo_open = false;
+    var is_config_open = true;
+    var is_graphics_outdated = false;
 
     var frame_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
@@ -245,8 +304,14 @@ pub fn main() !void {
                     c.igTextUnformatted(time_text.ptr, @as([*]u8, time_text.ptr) + time_text.len);
                 }
 
-                if (c.igCheckbox("Wait for VSync", &wait_for_vsync)) {
-                    graphics_outdated = true;
+                if (c.igCheckbox("Wait for VSync", &config.wait_for_vsync)) {
+                    is_graphics_outdated = true;
+
+                    if (exe_dir) |*dir| {
+                        config.trySave(dir);
+                    } else {
+                        std.log.err("Expected exe dir to exist when saving config", .{});
+                    }
                 }
 
                 if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
@@ -319,10 +384,10 @@ pub fn main() !void {
             else => |narrow| return narrow,
         };
 
-        if (state == .suboptimal or extent.width != @as(u32, @intCast(fw)) or extent.height != @as(u32, @intCast(fh)) or graphics_outdated) {
+        if (state == .suboptimal or extent.width != @as(u32, @intCast(fw)) or extent.height != @as(u32, @intCast(fh)) or is_graphics_outdated) {
             extent.width = @intCast(fw);
             extent.height = @intCast(fh);
-            try swapchain.recreate(extent, wait_for_vsync);
+            try swapchain.recreate(extent, config.wait_for_vsync);
 
             destroyFramebuffers(gc, allocator, framebuffers);
             framebuffers = try createFramebuffers(gc, allocator, render_pass, swapchain);
@@ -337,7 +402,7 @@ pub fn main() !void {
 
             try ic.resize(&swapchain);
 
-            graphics_outdated = false;
+            is_graphics_outdated = false;
         }
 
         ic.postPresent();
