@@ -4,8 +4,11 @@
     .minimum_zig_version = "0.11.0",
     .dependencies = .{
         .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/62e981ad4e5a5afdbd5051d10d2e8a211840fd2e.tar.gz",
-            .hash = "1220cac0f5c2006252f1cf6c1ce8b88bfb136238dc48dd511635bb63dc66e119e02a",
+            // TODO: Use main repo once https://github.com/Snektron/vulkan-zig/pull/118 is merged.
+            // .url = "https://github.com/Snektron/vulkan-zig/archive/62e981ad4e5a5afdbd5051d10d2e8a211840fd2e.tar.gz",
+            // .hash = "1220cac0f5c2006252f1cf6c1ce8b88bfb136238dc48dd511635bb63dc66e119e02a",
+            .url = "https://github.com/Sirius902/vulkan-zig/archive/be2ebfbff43ab7d3ee6645057e77ca4ea86cc4bd.tar.gz",
+            .hash = "122047b773db60d234bfe5018a5cd6a0f46ee19456a0c824499d75b8ea018cabdf80",
         },
         .zlm = .{
             .url = "https://github.com/ziglibs/zlm/archive/b0a06cf8c7173af88d710f25bb1f8fa77972689a.tar.gz",
