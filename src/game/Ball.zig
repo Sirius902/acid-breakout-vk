@@ -1,6 +1,7 @@
 const std = @import("std");
 const assets = @import("assets");
 const zlm = @import("zlm");
+const color = @import("../color.zig");
 const math = @import("../math.zig");
 const Game = @import("game.zig").Game;
 const DrawList = @import("game.zig").DrawList;
@@ -18,16 +19,16 @@ const Self = @This();
 
 pos: Vec2,
 vel: Vec2,
-// TODO: Derive color from collision and etc.
-color: Vec3 = vec3(1, 0, 0),
+color: Vec3,
 delay: f32,
-distance_until_history: f32,
+history_timer: f32,
 pos_history: PosHistory,
 pos_history_nodes: [history_max_len]PosHistory.Node,
 is_hit: bool,
 marked_for_delete: bool,
 
 pub const SpawnParams = struct {
+    start_pos: ?Vec2 = null,
     random_x_vel: bool = true,
     delay: f32 = 0,
 };
@@ -37,14 +38,16 @@ const PosHistory = std.DoublyLinkedList(Vec2);
 const gravity = 60;
 const size = vec2(1, 1);
 const history_max_len = 8;
-const history_distance = 120 / history_max_len;
+const history_interval = @as(f32, 0.25) / history_max_len;
 
 pub fn spawn(game: *Game, params: SpawnParams) Self {
+    const pos = if (params.start_pos) |p| p else math.vec2Cast(f32, game.size).scale(0.5);
     return .{
-        .pos = math.vec2Cast(f32, game.size).scale(0.5),
+        .pos = pos,
         .vel = if (params.random_x_vel) vec2(16 * 2 * (game.random().float(f32) - 0.5), 0) else Vec2.zero,
+        .color = colorAtPos(game, pos),
         .delay = params.delay,
-        .distance_until_history = 0,
+        .history_timer = 0,
         .pos_history = .{},
         .pos_history_nodes = undefined,
         .is_hit = false,
@@ -58,17 +61,18 @@ pub fn tick(self: *Self, game: *Game) void {
         return;
     }
 
-    const prev_pos = self.pos;
-
     if (!self.is_hit) self.vel.y -= gravity * game.dt;
-    self.moveAndCollide(game);
+    self.pos = self.pos.add(self.vel.scale(game.dt));
 
-    if (self.distance_until_history > 0) {
-        const dist = self.pos.sub(prev_pos).length();
-        self.distance_until_history = @max(0, self.distance_until_history - dist);
+    if (self.handleCollision(game)) |collision_pos| {
+        self.updateHistory(collision_pos);
+    }
+
+    if (self.history_timer > 0) {
+        self.history_timer = @max(0, self.history_timer - game.dt);
     } else {
-        self.updateHistory();
-        self.distance_until_history = history_distance;
+        self.updateHistory(self.pos);
+        self.history_timer = history_interval;
     }
 
     if (!self.isVisible(game)) self.marked_for_delete = true;
@@ -82,16 +86,20 @@ pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList
     const b = self.color.z;
 
     {
-        if (self.is_hit) try draw_list.beginPath();
+        if (self.is_hit) {
+            try draw_list.beginPath();
+            try draw_list.addPoint(.{ .pos = self.pos, .shading = .{ .color = vec4(r, g, b, 1) } });
+        }
         defer if (self.is_hit) draw_list.endPath() catch {};
 
-        var tail_len: usize = self.pos_history.len;
+        var i: usize = 0;
         var pos_history_node = self.pos_history.first;
-        while (pos_history_node) |node| : (tail_len -= 1) {
+        while (pos_history_node) |node| : (i += 1) {
             const next = node.next;
             defer pos_history_node = next;
 
-            const alpha = @as(f32, @floatFromInt(tail_len)) / @as(f32, @floatFromInt(self.pos_history.len));
+            const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(@max(1, self.pos_history.len - 1)));
+            const alpha = 1.0 - t;
             try draw_list.addPoint(.{ .pos = node.data, .shading = .{ .color = vec4(r, g, b, alpha) } });
         }
     }
@@ -116,7 +124,7 @@ fn isVisible(self: *const Self, game: *const Game) bool {
     return false;
 }
 
-fn moveAndCollide(self: *Self, game: *Game) void {
+fn handleCollision(self: *Self, game: *Game) ?Vec2 {
     const target_pos = self.pos.add(self.vel.scale(game.dt));
     const target_rect = math.Rect.fromCenter(target_pos, size);
     const paddle_rect = game.paddle.rect(game);
@@ -133,17 +141,13 @@ fn moveAndCollide(self: *Self, game: *Game) void {
         self.vel.x = self.pos.x - game.paddle.center_x;
         self.vel.y *= -1;
         self.vel = self.vel.normalize().scale(speed);
-
-        self.pos = self.pos.add(self.vel.scale(game.dt));
-        return;
+        return target_pos;
     }
 
     if (self.is_hit and target_rect.overlaps(game.strip.rect)) {
         game.strip.notifyCollision(game, target_pos);
-
         self.vel.y *= -1;
-        self.pos = self.pos.add(self.vel.scale(game.dt));
-        return;
+        return target_pos;
     }
 
     const game_rect = game.rect();
@@ -160,19 +164,23 @@ fn moveAndCollide(self: *Self, game: *Game) void {
         }
 
         if (is_collision) game.playSound(&assets.ball_reflect);
-        self.pos = self.pos.add(self.vel.scale(game.dt));
-        return;
+        return target_pos;
     }
 
-    self.pos = target_pos;
+    return null;
 }
 
-fn updateHistory(self: *Self) void {
+fn updateHistory(self: *Self, pos: Vec2) void {
     const history_node = if (self.pos_history.len < self.pos_history_nodes.len)
         &self.pos_history_nodes[self.pos_history.len]
     else
         self.pos_history.pop() orelse unreachable;
 
-    history_node.data = self.pos;
+    history_node.data = pos;
     self.pos_history.prepend(history_node);
+}
+
+fn colorAtPos(game: *const Game, pos: Vec2) Vec3 {
+    const game_x = pos.x / @as(f32, @floatFromInt(game.size.x));
+    return color.lrgbFromHsv(vec3(game_x * zlm.toRadians(360.0), 1, 1));
 }

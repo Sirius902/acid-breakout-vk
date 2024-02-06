@@ -45,7 +45,6 @@ pub fn notifyCollision(self: *Self, game: *Game, pos: Vec2) void {
     game.playSound(&assets.ball_free);
 
     const ball = &ball_node.data;
-    ball.* = Ball.spawn(game, .{});
-    ball.pos = rounded_pos;
+    ball.* = Ball.spawn(game, .{ .start_pos = rounded_pos });
     game.balls.append(ball_node);
 }

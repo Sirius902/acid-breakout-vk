@@ -931,14 +931,13 @@ fn recordCommandBuffer(
         .p_clear_values = @as([*]const vk.ClearValue, @ptrCast(&clear)),
     }, .@"inline");
 
-    if (rect_instance_buffer.handle != .null_handle) {
-        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.rect);
+    if (line_vertex_buffer.handle != .null_handle) {
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.line);
         gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
-        const rect_offsets = [_]vk.DeviceSize{ 0, 0 };
-        const rect_vertex_buffers = [_]vk.Buffer{ rect_vertex_buffer.handle, rect_instance_buffer.handle };
-        gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, rect_vertex_buffers.len, &rect_vertex_buffers, &rect_offsets);
-        gc.vkd.cmdBindIndexBuffer(cmdbuf, rect_index_buffer.handle, 0, .uint16);
-        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(rect_index_buffer.len), @intCast(rect_instance_buffer.len), 0, 0, 0);
+        const line_offsets = [_]vk.DeviceSize{0};
+        gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&line_vertex_buffer.handle), &line_offsets);
+        gc.vkd.cmdBindIndexBuffer(cmdbuf, line_index_buffer.handle, 0, .uint16);
+        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(line_index_buffer.len), 1, 0, 0, 0);
     }
 
     if (point_vertex_buffer.handle != .null_handle) {
@@ -949,13 +948,14 @@ fn recordCommandBuffer(
         gc.vkd.cmdDraw(cmdbuf, @intCast(point_vertex_buffer.len), 1, 0, 0);
     }
 
-    if (line_vertex_buffer.handle != .null_handle) {
-        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.line);
+    if (rect_instance_buffer.handle != .null_handle) {
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.rect);
         gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
-        const line_offsets = [_]vk.DeviceSize{0};
-        gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&line_vertex_buffer.handle), &line_offsets);
-        gc.vkd.cmdBindIndexBuffer(cmdbuf, line_index_buffer.handle, 0, .uint16);
-        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(line_index_buffer.len), 1, 0, 0, 0);
+        const rect_offsets = [_]vk.DeviceSize{ 0, 0 };
+        const rect_vertex_buffers = [_]vk.Buffer{ rect_vertex_buffer.handle, rect_instance_buffer.handle };
+        gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, rect_vertex_buffers.len, &rect_vertex_buffers, &rect_offsets);
+        gc.vkd.cmdBindIndexBuffer(cmdbuf, rect_index_buffer.handle, 0, .uint16);
+        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(rect_index_buffer.len), @intCast(rect_instance_buffer.len), 0, 0, 0);
     }
 
     ic.drawTexture(cmdbuf);

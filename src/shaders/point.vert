@@ -14,11 +14,11 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 void main() {
+#ifndef IS_LINE
+    gl_PointSize = 1.0;
+#endif
+
     gl_Position = pc.view * vec4(inPosition, 0.0, 1.0);
     fragColor = inColor;
     shading = inShading;
-
-#ifndef IS_LINE
-    gl_PointSize = 2;
-#endif
 }
