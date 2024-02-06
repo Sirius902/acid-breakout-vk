@@ -9,6 +9,7 @@ const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
 const Swapchain = @import("swapchain.zig").Swapchain;
 const ImGuiContext = @import("imgui_context.zig").ImGuiContext;
 const AudioContext = @import("audio_context.zig").AudioContext;
+const InputContext = @import("InputContext.zig");
 const Game = @import("game/game.zig").Game;
 const DrawList = @import("game/game.zig").DrawList;
 const Allocator = std.mem.Allocator;
@@ -162,6 +163,7 @@ const PushConstants = extern struct {
 
 const Config = struct {
     wait_for_vsync: bool = true,
+    is_config_open: bool = true,
     volume: ?f32 = null,
     pitch_variance: ?f32 = null,
 
@@ -255,6 +257,12 @@ pub fn main() !void {
         null,
     ) orelse return error.WindowInitFailed;
     defer c.glfwDestroyWindow(window);
+
+    var input = InputContext.init();
+
+    _ = c.glfwSetWindowUserPointer(window, &input);
+    _ = c.glfwSetCursorPosCallback(window, glfwCursorPosCallback);
+    _ = c.glfwSetKeyCallback(window, glfwKeyCallback);
 
     const gc = try GraphicsContext.init(allocator, app_name, window);
     defer gc.deinit();
@@ -398,18 +406,11 @@ pub fn main() !void {
     defer draw_list.deinit();
 
     var is_demo_open = false;
-    var is_config_open = true;
     var is_graphics_outdated = false;
+    var is_f1_down = false;
 
     var frame_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
-        var mxf: f64 = undefined;
-        var myf: f64 = undefined;
-        c.glfwGetCursorPos(window, &mxf, &myf);
-
-        const mx: c_int = @intFromFloat(@round(mxf));
-        const my: c_int = @intFromFloat(@round(myf));
-
         var ww: c_int = undefined;
         var wh: c_int = undefined;
         c.glfwGetWindowSize(window, &ww, &wh);
@@ -420,12 +421,13 @@ pub fn main() !void {
         var fh: c_int = undefined;
         c.glfwGetFramebufferSize(window, &fw, &fh);
 
-        const mouse_pos = if (mx >= 0 and mx < ww and my >= 0 and my < wh)
-            vec2(@floatCast(mxf), @floatCast(myf)).mul(math.vec2Cast(f32, game.size)).div(window_size)
+        const mouse_state = input.mouseState();
+        const mouse_pos = if (mouse_state.pos) |p|
+            p.mul(math.vec2Cast(f32, game.size)).div(window_size)
         else
             null;
 
-        game.updateInput(mouse_pos);
+        game.updateInput(mouse_pos, input.keyState(.escape).isDown());
         const tick_result = game.tick(frame_timer.lap());
         for (tick_result.sound_list) |hash| {
             try ac.playSound(hash);
@@ -439,10 +441,34 @@ pub fn main() !void {
 
         ic.newFrame();
 
+        var is_save_config = false;
+
+        const f1 = input.keyState(.f1).isDown();
+        if (!is_f1_down and f1) {
+            config.is_config_open = !config.is_config_open;
+            is_save_config = true;
+        }
+        is_f1_down = f1;
+
         if (is_demo_open) c.igShowDemoWindow(&is_demo_open);
-        if (is_config_open) {
-            if (c.igBegin(app_name, &is_config_open, c.ImGuiWindowFlags_None)) {
-                defer c.igEnd();
+        if (config.is_config_open) {
+            var is_open = config.is_config_open;
+            if (c.igBegin(app_name, &is_open, c.ImGuiWindowFlags_None)) {
+                defer {
+                    c.igEnd();
+                    if (config.is_config_open != is_open) {
+                        config.is_config_open = is_open;
+                        is_save_config = true;
+                    }
+                }
+
+                {
+                    const status = if (game.is_paused) "Paused" else "Playing";
+                    const status_text = try std.fmt.allocPrint(allocator, "Status: {s}", .{status});
+                    defer allocator.free(status_text);
+
+                    c.igTextUnformatted(status_text.ptr, @as([*]u8, status_text.ptr) + status_text.len);
+                }
 
                 {
                     const avg_tps = @round(game.averageTps() * 10) / 10;
@@ -475,7 +501,6 @@ pub fn main() !void {
                     c.igTextUnformatted(particle_count_text.ptr, @as([*]u8, particle_count_text.ptr) + particle_count_text.len);
                 }
 
-                var is_save_config = false;
                 if (c.igCheckbox("Wait for VSync", &config.wait_for_vsync)) {
                     is_graphics_outdated = true;
                     is_save_config = true;
@@ -511,15 +536,15 @@ pub fn main() !void {
                     ac.playSound(&assets.ball_reflect.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
                 }
 
-                if (is_save_config) {
-                    if (exe_dir) |*dir| {
-                        config.trySave(dir);
-                    } else {
-                        std.log.err("Expected exe dir to exist when saving config", .{});
-                    }
-                }
-
                 if (c.igButton("Open Demo Window", .{ .x = 0, .y = 0 })) is_demo_open = true;
+            }
+        }
+
+        if (is_save_config) {
+            if (exe_dir) |*dir| {
+                config.trySave(dir);
+            } else {
+                std.log.err("Expected exe dir to exist when saving config", .{});
             }
         }
 
@@ -624,6 +649,41 @@ pub fn main() !void {
 
 fn glfwErrorCallback(error_code: c_int, description: [*c]const u8) callconv(.C) void {
     std.log.err("GLFW error {}: {s}", .{ error_code, description });
+}
+
+fn glfwCursorPosCallback(window: ?*c.GLFWwindow, x: f64, y: f64) callconv(.C) void {
+    const input: *InputContext = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window).?));
+    input.updateMouse(vec2(@floatCast(x), @floatCast(y)));
+}
+
+var glfw_scancode_cache: std.EnumMap(InputContext.Key, c_int) = .{};
+fn glfwKeyCallback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
+    _ = key;
+    _ = mods;
+
+    const input_key: ?InputContext.Key = for (std.enums.values(InputContext.Key)) |k| {
+        if (!glfw_scancode_cache.contains(k)) {
+            const glfw_key = switch (k) {
+                .escape => c.GLFW_KEY_ESCAPE,
+                .f1 => c.GLFW_KEY_F1,
+            };
+            glfw_scancode_cache.put(k, c.glfwGetKeyScancode(glfw_key));
+        }
+
+        if (glfw_scancode_cache.getAssertContains(k) == scancode) break k;
+    } else null;
+
+    if (input_key) |k| {
+        const input_state: InputContext.KeyState = switch (action) {
+            c.GLFW_PRESS => .press,
+            c.GLFW_RELEASE => .release,
+            c.GLFW_REPEAT => .repeat,
+            else => std.debug.panic("Unexpected GLFW key action: {}", .{action}),
+        };
+
+        const input: *InputContext = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window).?));
+        input.updateKey(k, input_state);
+    }
 }
 
 fn Buffer(comptime T: type) type {

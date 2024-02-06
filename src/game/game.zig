@@ -30,11 +30,13 @@ pub const Game = struct {
     dt: f32,
     time: f32,
     avg_dt: f64,
+    is_paused: bool,
     // TODO: Gamepad input.
     /// Last known mouse position within the game window.
     mouse_pos: ?Vec2,
     /// The number of units the player's cursor changed since the last tick.
     cursor_delta: Vec2,
+    pause_pressed: bool,
     size: Vec2u,
     paddle: Paddle,
     strip: Strip,
@@ -55,8 +57,10 @@ pub const Game = struct {
             .dt = target_dt,
             .time = 0,
             .avg_dt = target_dt,
+            .is_paused = false,
             .mouse_pos = null,
             .cursor_delta = Vec2.zero,
+            .pause_pressed = false,
             .size = size,
             .paddle = undefined,
             .strip = undefined,
@@ -84,6 +88,8 @@ pub const Game = struct {
     pub fn tick(self: *Game, ticktime: u64) TickResult {
         _ = self.tick_arena.reset(.retain_capacity);
         self.sound_list.clearRetainingCapacity();
+
+        if (self.is_paused) return .{ .sound_list = self.sound_list.items };
 
         const ticktime_s: f32 = @floatCast(@as(f64, @floatFromInt(ticktime)) / std.time.ns_per_s);
         self.dt = @min(ticktime_s, max_dt);
@@ -124,7 +130,7 @@ pub const Game = struct {
         try self.paddle.draw(self, draw_list);
     }
 
-    pub fn updateInput(self: *Game, mouse_pos: ?Vec2) void {
+    pub fn updateInput(self: *Game, mouse_pos: ?Vec2, pause_pressed: bool) void {
         self.cursor_delta = blk: {
             if (self.mouse_pos) |prev_pos| {
                 if (mouse_pos) |pos| {
@@ -137,6 +143,11 @@ pub const Game = struct {
         if (mouse_pos) |pos| {
             self.mouse_pos = pos;
         }
+
+        if (pause_pressed and !self.pause_pressed) {
+            self.is_paused = !self.is_paused;
+        }
+        self.pause_pressed = pause_pressed;
     }
 
     pub fn playSound(self: *Game, sound: *const Sound) void {
