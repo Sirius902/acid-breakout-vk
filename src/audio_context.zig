@@ -206,6 +206,9 @@ pub const AudioContext = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
+        c.alListenerf(c.AL_GAIN, self.getGain());
+        try checkAlError();
+
         self.removeFinishedSources();
         try self.startQueuedSounds();
     }
@@ -234,13 +237,12 @@ pub const AudioContext = struct {
     fn startQueuedSounds(self: *AudioContext) !void {
         while (self.sound_queue.pop()) |node| {
             defer self.sound_queue_free.append(node);
-            if (self.isMuted()) return;
 
             const buffer = node.data;
             const source_node = self.nextSource();
             errdefer self.destroySource(source_node);
 
-            try playSource(source_node.data, buffer, self.getGain());
+            try playSource(source_node.data, buffer, 1);
         }
     }
 
