@@ -464,6 +464,13 @@ pub fn main() !void {
                     c.igTextUnformatted(time_text.ptr, @as([*]u8, time_text.ptr) + time_text.len);
                 }
 
+                {
+                    const particle_count_text = try std.fmt.allocPrint(allocator, "Particle Count: {}", .{game.balls.len});
+                    defer allocator.free(particle_count_text);
+
+                    c.igTextUnformatted(particle_count_text.ptr, @as([*]u8, particle_count_text.ptr) + particle_count_text.len);
+                }
+
                 var is_save_config = false;
                 if (c.igCheckbox("Wait for VSync", &config.wait_for_vsync)) {
                     is_graphics_outdated = true;
