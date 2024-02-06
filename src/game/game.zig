@@ -25,6 +25,7 @@ pub const TickResult = struct {
 pub const Game = struct {
     allocator: Allocator,
     tick_arena: ArenaAllocator,
+    ball_arena: ArenaAllocator,
     /// The time elapsed from the previous tick to the current tick in seconds.
     dt: f32,
     time: f32,
@@ -39,6 +40,7 @@ pub const Game = struct {
     strip: Strip,
     // TODO: Allocate balls in arena?
     balls: BallList,
+    free_balls: BallList,
     sound_list: std.ArrayList(*const Sound.Hash),
     prng: Prng,
 
@@ -48,9 +50,11 @@ pub const Game = struct {
     const BallList = std.DoublyLinkedList(Ball);
 
     pub fn init(size: Vec2u, allocator: Allocator) !Game {
+        const ball_arena = ArenaAllocator.init(allocator);
         var self: Game = .{
             .allocator = allocator,
             .tick_arena = ArenaAllocator.init(allocator),
+            .ball_arena = ball_arena,
             .dt = target_dt,
             .time = 0,
             .avg_dt = target_dt,
@@ -60,25 +64,21 @@ pub const Game = struct {
             .paddle = undefined,
             .strip = undefined,
             .balls = .{},
+            .free_balls = .{},
             .sound_list = std.ArrayList(*const Sound.Hash).init(allocator),
             .prng = Prng.init(0xDEADBEEFC0FFEE),
         };
         self.paddle = Paddle.spawn(&self);
         self.strip = Strip.spawn(&self);
-
-        const ball_node = try allocator.create(BallList.Node);
-        errdefer allocator.destroy(ball_node);
-        ball_node.data = Ball.spawn(&self, .{ .random_x_vel = false, .delay = 1 });
-        self.balls.append(ball_node);
+        self.spawnBall(.{ .random_x_vel = false, .delay = 1 });
 
         return self;
     }
 
     pub fn deinit(self: *Game) void {
         self.tick_arena.deinit();
+        self.ball_arena.deinit();
         self.sound_list.deinit();
-
-        while (self.balls.pop()) |node| self.allocator.destroy(node);
     }
 
     /// Simulates one tick of the game.
@@ -106,7 +106,7 @@ pub const Game = struct {
             ball.tick(self);
             if (ball.marked_for_delete) {
                 self.balls.remove(n);
-                self.allocator.destroy(n);
+                self.free_balls.append(n);
             }
         }
 
@@ -146,6 +146,17 @@ pub const Game = struct {
         self.sound_list.append(&sound.hash) catch |err| {
             log.err("Failure adding to sound list: {}", .{err});
         };
+    }
+
+    pub fn spawnBall(self: *Game, params: Ball.SpawnParams) void {
+        const node = self.free_balls.pop() orelse self.ball_arena.allocator().create(BallList.Node) catch |err| {
+            log.err("Failed to alloc ball node: {}", .{err});
+            return;
+        };
+
+        const ball = &node.data;
+        ball.* = Ball.spawn(self, params);
+        self.balls.append(node);
     }
 
     pub fn rect(self: *const Game) math.Rect {

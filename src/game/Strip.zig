@@ -33,18 +33,9 @@ pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList
     });
 }
 
-// TODO: Add method to spawn entity on `Game`.
 pub fn notifyCollision(self: *Self, game: *Game, pos: Vec2) void {
     _ = self;
     const rounded_pos = math.vec2Round(pos);
-    const ball_node = game.allocator.create(@import("std").DoublyLinkedList(Ball).Node) catch |err| {
-        @import("std").log.err("Failed to spawn ball: {}", .{err});
-        return;
-    };
-
+    game.spawnBall(.{ .start_pos = rounded_pos });
     game.playSound(&assets.ball_free);
-
-    const ball = &ball_node.data;
-    ball.* = Ball.spawn(game, .{ .start_pos = rounded_pos });
-    game.balls.append(ball_node);
 }
