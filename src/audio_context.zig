@@ -2,13 +2,24 @@ const std = @import("std");
 const c = @import("c.zig");
 const Sound = @import("assets").Sound;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const log = std.log.scoped(.audio);
 
 pub const AudioContext = struct {
     allocator: Allocator,
     sound_cache: Cache,
+
+    buffer_buf: std.ArrayList(c.ALuint),
+
     sound_queue: Queue,
+    sound_queue_free: Queue,
+    sound_queue_nodes: [max_sources]Queue.Node,
+
     sources: SourceList,
+    free_sources: SourceList,
+    source_nodes: [max_sources]SourceList.Node,
+    source_buf: [max_sources]c.ALuint,
+
     thread: ?std.Thread,
     stop_flag: std.atomic.Value(bool),
     rwlock: std.Thread.RwLock,
@@ -27,6 +38,7 @@ pub const AudioContext = struct {
     const Queue = std.DoublyLinkedList(c.ALuint);
     const SourceList = std.DoublyLinkedList(c.ALuint);
 
+    const max_sources = 64;
     const poll_time = 16 * std.time.ns_per_ms;
 
     pub fn init(allocator: Allocator) !*AudioContext {
@@ -43,10 +55,12 @@ pub const AudioContext = struct {
             try checkAlcError(dev);
             return error.AlcMakeContextCurrent;
         }
+        errdefer _ = c.alcMakeContextCurrent(null);
 
-        // Disable spatial audio since we don't need it.
-        c.alDistanceModel(c.AL_NONE);
+        var source_buf: [max_sources]c.ALuint = undefined;
+        c.alGenSources(@intCast(source_buf.len), &source_buf);
         try checkAlError();
+        errdefer c.alDeleteSources(@intCast(source_buf.len), &source_buf);
 
         var self = try allocator.create(AudioContext);
         errdefer allocator.destroy(self);
@@ -55,7 +69,13 @@ pub const AudioContext = struct {
             .allocator = allocator,
             .sound_cache = Cache.init(allocator),
             .sound_queue = .{},
+            .sound_queue_free = .{},
+            .sound_queue_nodes = undefined,
+            .buffer_buf = std.ArrayList(c.ALuint).init(allocator),
             .sources = .{},
+            .free_sources = .{},
+            .source_nodes = undefined,
+            .source_buf = source_buf,
             .thread = null,
             .stop_flag = std.atomic.Value(bool).init(false),
             .rwlock = .{},
@@ -64,7 +84,15 @@ pub const AudioContext = struct {
             .avg_ticktime_s = std.atomic.Value(f64).init(@as(f64, poll_time) / std.time.ns_per_s),
             .gain = std.atomic.Value(f32).init(1),
         };
-        errdefer self.deinit();
+
+        for (&self.source_nodes, &source_buf) |*node, source| {
+            node.data = source;
+            self.free_sources.append(node);
+        }
+
+        for (&self.sound_queue_nodes) |*node| {
+            self.sound_queue_free.append(node);
+        }
 
         self.thread = try std.Thread.spawn(.{}, audioThread, .{self});
         return self;
@@ -76,16 +104,12 @@ pub const AudioContext = struct {
             t.join();
         }
 
-        while (self.sources.popFirst()) |node| {
-            defer self.allocator.destroy(node);
-            c.alDeleteSources(1, &node.data);
-        }
+        c.alSourceStopv(@intCast(self.source_buf.len), &self.source_buf);
+        c.alDeleteSources(@intCast(self.source_buf.len), &self.source_buf);
 
-        // Don't destroy buffers since they are cached.
-        while (self.sound_queue.popFirst()) |node| self.allocator.destroy(node);
+        c.alDeleteBuffers(@intCast(self.buffer_buf.items.len), self.buffer_buf.items.ptr);
+        self.buffer_buf.deinit();
 
-        var cache_iter = self.sound_cache.valueIterator();
-        while (cache_iter.next()) |entry| c.alDeleteBuffers(1, &entry.buffer);
         self.sound_cache.deinit();
 
         _ = c.alcMakeContextCurrent(null);
@@ -134,6 +158,9 @@ pub const AudioContext = struct {
             self.rwlock.lock();
             defer self.rwlock.unlock();
 
+            try self.buffer_buf.append(buffer);
+            errdefer _ = self.buffer_buf.pop();
+
             try self.sound_cache.putNoClobber(sound.hash, .{ .sound = sound, .buffer = buffer });
         }
     }
@@ -145,12 +172,13 @@ pub const AudioContext = struct {
 
             break :blk self.sound_cache.getPtr(hash.*) orelse return error.SoundNotCached;
         };
-        const node = try self.allocator.create(Queue.Node);
-        node.data = entry.buffer;
 
         self.rwlock.lock();
         defer self.rwlock.unlock();
-        self.sound_queue.prepend(node);
+
+        const node = self.sound_queue_free.pop() orelse (self.sound_queue.popFirst() orelse unreachable);
+        node.data = entry.buffer;
+        self.sound_queue.append(node);
     }
 
     pub fn averageTps(self: *const AudioContext) f64 {
@@ -178,27 +206,11 @@ pub const AudioContext = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
-        try self.removeFinishedSources();
+        self.removeFinishedSources();
         try self.startQueuedSounds();
     }
 
-    fn startQueuedSounds(self: *AudioContext) !void {
-        while (self.sound_queue.pop()) |node| {
-            defer self.allocator.destroy(node);
-            if (self.isMuted()) return;
-
-            const buffer = node.data;
-            const source_node = try self.allocator.create(SourceList.Node);
-            errdefer self.allocator.destroy(source_node);
-
-            source_node.data = try initSource(buffer, self.getGain());
-            errdefer c.alDeleteSources(1, &source_node.data);
-
-            self.sources.prepend(source_node);
-        }
-    }
-
-    fn removeFinishedSources(self: *AudioContext) !void {
+    fn removeFinishedSources(self: *AudioContext) void {
         const is_muted = self.isMuted();
         var state: c.ALint = c.AL_PLAYING;
         var source_node = self.sources.first;
@@ -214,19 +226,46 @@ pub const AudioContext = struct {
             };
 
             if (is_muted or state != c.AL_PLAYING or err_occured) {
-                defer self.allocator.destroy(node);
-                self.sources.remove(node);
-                c.alDeleteSources(1, &node.data);
+                self.destroySource(node);
             }
         }
     }
 
-    fn initSource(buffer: c.ALuint, gain: f32) !c.ALuint {
-        var source: c.ALuint = undefined;
-        c.alGenSources(1, &source);
-        try checkAlError();
-        errdefer c.alDeleteSources(1, &source);
+    fn startQueuedSounds(self: *AudioContext) !void {
+        while (self.sound_queue.pop()) |node| {
+            defer self.sound_queue_free.append(node);
+            if (self.isMuted()) return;
 
+            const buffer = node.data;
+            const source_node = self.nextSource();
+            errdefer self.destroySource(source_node);
+
+            try playSource(source_node.data, buffer, self.getGain());
+        }
+    }
+
+    fn nextSource(self: *AudioContext) *SourceList.Node {
+        if (self.free_sources.pop()) |node| {
+            self.sources.append(node);
+            return node;
+        }
+        // Recycle oldest source.
+        const node = self.sources.first orelse unreachable;
+        c.alSourceStop(node.data);
+        checkAlError() catch |err| std.debug.panic("Failed to stop source 0x{}: {}", .{ node.data, err });
+        return node;
+    }
+
+    fn destroySource(self: *AudioContext, node: *SourceList.Node) void {
+        c.alSourceStop(node.data);
+        checkAlError() catch |err| {
+            log.warn("Failed to stop source {X}: {}", .{ node.data, err });
+        };
+        self.sources.remove(node);
+        self.free_sources.append(node);
+    }
+
+    fn playSource(source: c.ALuint, buffer: c.ALuint, gain: f32) !void {
         c.alSourcef(source, c.AL_PITCH, 1);
         try checkAlError();
         c.alSourcef(source, c.AL_GAIN, gain);
@@ -238,8 +277,6 @@ pub const AudioContext = struct {
 
         c.alSourcePlay(source);
         try checkAlError();
-
-        return source;
     }
 };
 
