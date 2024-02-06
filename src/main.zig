@@ -369,8 +369,8 @@ pub fn main() !void {
         allocator.free(line_vertex_buffers);
     }
 
-    const line_index_buffers = try allocator.alloc(Buffer(u16), swapchain.swap_images.len);
-    for (line_index_buffers) |*ib| ib.* = Buffer(u16).init(.{
+    const line_index_buffers = try allocator.alloc(Buffer(u32), swapchain.swap_images.len);
+    for (line_index_buffers) |*ib| ib.* = Buffer(u32).init(.{
         .usage = .{ .index_buffer_bit = true },
         .sharing_mode = .exclusive,
         .mem_flags = .{ .host_visible_bit = true, .host_coherent_bit = true },
@@ -706,14 +706,14 @@ const DrawData = struct {
     rects: std.ArrayList(Instance),
     point_verts: std.ArrayList(PointVertex),
     line_verts: std.ArrayList(PointVertex),
-    line_indices: std.ArrayList(u16),
+    line_indices: std.ArrayList(u32),
 
     pub fn init(allocator: Allocator) DrawData {
         return .{
             .rects = std.ArrayList(Instance).init(allocator),
             .point_verts = std.ArrayList(PointVertex).init(allocator),
             .line_verts = std.ArrayList(PointVertex).init(allocator),
-            .line_indices = std.ArrayList(u16).init(allocator),
+            .line_indices = std.ArrayList(u32).init(allocator),
         };
     }
 
@@ -798,10 +798,10 @@ fn executeDrawList(draw_list: *const DrawList, allocator: Allocator) !DrawData {
         }
 
         if (path.points.len == 1) {
-            try draw_data.line_indices.appendSlice(&[_]u16{ @intCast(path_start), @intCast(path_start) });
+            try draw_data.line_indices.appendSlice(&[_]u32{ @intCast(path_start), @intCast(path_start) });
         } else {
             for (0..path.points.len - 1) |i| {
-                try draw_data.line_indices.appendSlice(&[_]u16{ @intCast(path_start + i), @intCast(path_start + i + 1) });
+                try draw_data.line_indices.appendSlice(&[_]u32{ @intCast(path_start + i), @intCast(path_start + i + 1) });
             }
         }
     }
@@ -873,7 +873,7 @@ fn recordCommandBuffer(
     rect_instance_buffer: *const Buffer(Instance),
     point_vertex_buffer: *const Buffer(PointVertex),
     line_vertex_buffer: *const Buffer(PointVertex),
-    line_index_buffer: *const Buffer(u16),
+    line_index_buffer: *const Buffer(u32),
     extent: vk.Extent2D,
     render_pass: vk.RenderPass,
     pipelines: Pipelines,
@@ -936,7 +936,7 @@ fn recordCommandBuffer(
         gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
         const line_offsets = [_]vk.DeviceSize{0};
         gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&line_vertex_buffer.handle), &line_offsets);
-        gc.vkd.cmdBindIndexBuffer(cmdbuf, line_index_buffer.handle, 0, .uint16);
+        gc.vkd.cmdBindIndexBuffer(cmdbuf, line_index_buffer.handle, 0, .uint32);
         gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(line_index_buffer.len), 1, 0, 0, 0);
     }
 
