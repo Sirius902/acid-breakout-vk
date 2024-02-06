@@ -89,15 +89,14 @@ pub const Game = struct {
         _ = self.tick_arena.reset(.retain_capacity);
         self.sound_list.clearRetainingCapacity();
 
-        if (self.is_paused) return .{ .sound_list = self.sound_list.items };
-
+        const alpha = 0.2;
         const ticktime_s: f32 = @floatCast(@as(f64, @floatFromInt(ticktime)) / std.time.ns_per_s);
         self.dt = @min(ticktime_s, max_dt);
-        self.time += ticktime_s;
-
-        const alpha = 0.2;
         self.avg_dt = alpha * self.dt + (1 - alpha) * self.avg_dt;
 
+        if (self.is_paused) return .{ .sound_list = self.sound_list.items };
+
+        self.time += ticktime_s;
         self.paddle.tick(self);
 
         var ball_node = self.balls.first;
