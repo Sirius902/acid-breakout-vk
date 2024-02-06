@@ -162,7 +162,8 @@ const PushConstants = extern struct {
 
 const Config = struct {
     wait_for_vsync: bool = true,
-    volume: f32 = 1,
+    volume: ?f32 = null,
+    pitch_variance: ?f32 = null,
 
     pub const file_name = "acid-breakout.json";
 
@@ -203,7 +204,8 @@ const Config = struct {
 
     fn sanitize(self: Config) Config {
         var config = self;
-        config.volume = std.math.clamp(config.volume, 0, 1);
+        if (config.volume) |*volume| volume.* = std.math.clamp(volume.*, 0, 1);
+        if (config.pitch_variance) |*pv| pv.* = std.math.clamp(pv.*, 0, 1);
         return config;
     }
 };
@@ -383,7 +385,9 @@ pub fn main() !void {
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
 
-    ac.setGain(config.volume);
+    if (config.volume) |volume| ac.setListenerGain(volume);
+    if (config.pitch_variance) |pv| ac.setSourcePitchVariance(pv);
+
     try ac.cacheSound(&assets.ball_reflect);
     try ac.cacheSound(&assets.ball_free);
 
@@ -477,14 +481,29 @@ pub fn main() !void {
                     is_save_config = true;
                 }
 
-                if (c.igSliderFloat("Volume", &config.volume, 0, 1, "%.2f", 0)) {
-                    ac.setGain(config.volume);
+                var volume = config.volume orelse ac.getListenerGain();
+                if (c.igSliderFloat("Volume", &volume, 0, 1, "%.2f", 0)) {
+                    config.volume = volume;
+                    ac.setListenerGain(volume);
                     is_save_config = true;
                 }
 
                 if (c.igButton("Reset Volume", .{ .x = 0, .y = 0 })) {
-                    config.volume = 1;
-                    ac.setGain(config.volume);
+                    config.volume = null;
+                    ac.setListenerGain(AudioContext.default_listener_gain);
+                    is_save_config = true;
+                }
+
+                var variance = config.pitch_variance orelse ac.getSourcePitchVariance();
+                if (c.igSliderFloat("Pitch Variance", &variance, 0, 1, "%.2f", 0)) {
+                    config.pitch_variance = variance;
+                    ac.setSourcePitchVariance(variance);
+                    is_save_config = true;
+                }
+
+                if (c.igButton("Reset Pitch Variance", .{ .x = 0, .y = 0 })) {
+                    config.pitch_variance = null;
+                    ac.setSourcePitchVariance(AudioContext.default_source_pitch_variance);
                     is_save_config = true;
                 }
 

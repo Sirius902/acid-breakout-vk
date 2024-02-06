@@ -19,6 +19,7 @@ pub const AudioContext = struct {
     free_sources: SourceList,
     source_nodes: [max_sources]SourceList.Node,
     source_buf: [max_sources]c.ALuint,
+    prng: Prng,
 
     thread: ?std.Thread,
     stop_flag: std.atomic.Value(bool),
@@ -26,7 +27,11 @@ pub const AudioContext = struct {
     dev: *c.ALCdevice,
     ctx: *c.ALCcontext,
     avg_ticktime_s: std.atomic.Value(f64),
-    gain: std.atomic.Value(f32),
+    listener_gain: std.atomic.Value(f32),
+    source_pitch_variance: std.atomic.Value(f32),
+
+    pub const default_listener_gain = 1.0;
+    pub const default_source_pitch_variance = 0.05;
 
     const Cache = std.AutoHashMap(Sound.Hash, CacheEntry);
 
@@ -37,6 +42,8 @@ pub const AudioContext = struct {
 
     const Queue = std.DoublyLinkedList(c.ALuint);
     const SourceList = std.DoublyLinkedList(c.ALuint);
+
+    const Prng = std.rand.DefaultPrng;
 
     const max_sources = 64;
     const poll_time = 16 * std.time.ns_per_ms;
@@ -76,13 +83,15 @@ pub const AudioContext = struct {
             .free_sources = .{},
             .source_nodes = undefined,
             .source_buf = source_buf,
+            .prng = Prng.init(0xC0FFEEBABE26),
             .thread = null,
             .stop_flag = std.atomic.Value(bool).init(false),
             .rwlock = .{},
             .dev = dev,
             .ctx = ctx,
             .avg_ticktime_s = std.atomic.Value(f64).init(@as(f64, poll_time) / std.time.ns_per_s),
-            .gain = std.atomic.Value(f32).init(1),
+            .listener_gain = std.atomic.Value(f32).init(default_listener_gain),
+            .source_pitch_variance = std.atomic.Value(f32).init(default_source_pitch_variance),
         };
 
         for (&self.source_nodes, &source_buf) |*node, source| {
@@ -119,16 +128,24 @@ pub const AudioContext = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn getGain(self: *const AudioContext) f32 {
-        return self.gain.load(.Acquire);
+    pub fn getListenerGain(self: *const AudioContext) f32 {
+        return self.listener_gain.load(.Acquire);
+    }
+
+    pub fn setListenerGain(self: *AudioContext, gain: f32) void {
+        self.listener_gain.store(gain, .Release);
     }
 
     pub fn isMuted(self: *const AudioContext) bool {
-        return std.math.approxEqAbs(f32, self.getGain(), 0, std.math.floatEps(f32));
+        return std.math.approxEqAbs(f32, self.getListenerGain(), 0, std.math.floatEps(f32));
     }
 
-    pub fn setGain(self: *AudioContext, gain: f32) void {
-        self.gain.store(gain, .Release);
+    pub fn getSourcePitchVariance(self: *AudioContext) f32 {
+        return self.source_pitch_variance.load(.Acquire);
+    }
+
+    pub fn setSourcePitchVariance(self: *AudioContext, variance: f32) void {
+        self.source_pitch_variance.store(variance, .Release);
     }
 
     pub fn cacheSound(self: *AudioContext, sound: *const Sound) !void {
@@ -176,7 +193,7 @@ pub const AudioContext = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
-        const node = self.sound_queue_free.pop() orelse (self.sound_queue.popFirst() orelse unreachable);
+        const node = self.sound_queue_free.pop() orelse return;
         node.data = entry.buffer;
         self.sound_queue.append(node);
     }
@@ -206,7 +223,7 @@ pub const AudioContext = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
-        c.alListenerf(c.AL_GAIN, self.getGain());
+        c.alListenerf(c.AL_GAIN, self.getListenerGain());
         try checkAlError();
 
         self.removeFinishedSources();
@@ -235,6 +252,13 @@ pub const AudioContext = struct {
     }
 
     fn startQueuedSounds(self: *AudioContext) !void {
+        // If there's no more room for sounds empty the queue so we're not
+        // bogged down with tons of requests.
+        if (self.free_sources.len == 0) {
+            self.sound_queue_free.concatByMoving(&self.sound_queue);
+            return;
+        }
+
         while (self.sound_queue.pop()) |node| {
             defer self.sound_queue_free.append(node);
 
@@ -242,7 +266,8 @@ pub const AudioContext = struct {
             const source_node = self.nextSource();
             errdefer self.destroySource(source_node);
 
-            try playSource(source_node.data, buffer, 1);
+            const pitch = 1 + self.getSourcePitchVariance() * (self.prng.random().float(f32) - 0.5);
+            try playSource(source_node.data, buffer, pitch, 1);
         }
     }
 
@@ -267,8 +292,8 @@ pub const AudioContext = struct {
         self.free_sources.append(node);
     }
 
-    fn playSource(source: c.ALuint, buffer: c.ALuint, gain: f32) !void {
-        c.alSourcef(source, c.AL_PITCH, 1);
+    fn playSource(source: c.ALuint, buffer: c.ALuint, pitch: f32, gain: f32) !void {
+        c.alSourcef(source, c.AL_PITCH, pitch);
         try checkAlError();
         c.alSourcef(source, c.AL_GAIN, gain);
         try checkAlError();
