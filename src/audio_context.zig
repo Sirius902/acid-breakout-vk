@@ -99,6 +99,10 @@ pub const AudioContext = struct {
         return self.gain.load(.Acquire);
     }
 
+    pub fn isMuted(self: *const AudioContext) bool {
+        return std.math.approxEqAbs(f32, self.getGain(), 0, std.math.floatEps(f32));
+    }
+
     pub fn setGain(self: *AudioContext, gain: f32) void {
         self.gain.store(gain, .Release);
     }
@@ -181,8 +185,9 @@ pub const AudioContext = struct {
     fn startQueuedSounds(self: *AudioContext) !void {
         while (self.sound_queue.pop()) |node| {
             defer self.allocator.destroy(node);
-            const buffer = node.data;
+            if (self.isMuted()) return;
 
+            const buffer = node.data;
             const source_node = try self.allocator.create(SourceList.Node);
             errdefer self.allocator.destroy(source_node);
 
@@ -194,6 +199,7 @@ pub const AudioContext = struct {
     }
 
     fn removeFinishedSources(self: *AudioContext) !void {
+        const is_muted = self.isMuted();
         var state: c.ALint = c.AL_PLAYING;
         var source_node = self.sources.first;
         while (source_node) |node| {
@@ -207,7 +213,7 @@ pub const AudioContext = struct {
                 err_occured = true;
             };
 
-            if (state != c.AL_PLAYING or err_occured) {
+            if (is_muted or state != c.AL_PLAYING or err_occured) {
                 defer self.allocator.destroy(node);
                 self.sources.remove(node);
                 c.alDeleteSources(1, &node.data);
