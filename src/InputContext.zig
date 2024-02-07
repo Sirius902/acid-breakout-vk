@@ -1,5 +1,6 @@
 const std = @import("std");
 const zlm = @import("zlm");
+const Allocator = std.mem.Allocator;
 const AtomicSwapper = @import("util.zig").AtomicSwapper;
 
 mouse_state: AtomicSwapper(MouseState),
@@ -7,43 +8,64 @@ keyboard_state: AtomicSwapper(KeyboardState),
 
 const Self = @This();
 
-pub fn init() Self {
+pub fn init(allocator: Allocator) !Self {
     var keyboard_state: KeyboardState = .{};
     for (std.enums.values(Key)) |key| {
         keyboard_state.put(key, .release);
     }
 
     return .{
-        .mouse_state = AtomicSwapper(MouseState).init(.{}),
-        .keyboard_state = AtomicSwapper(KeyboardState).init(keyboard_state),
+        .mouse_state = try AtomicSwapper(MouseState).init(allocator, .{}),
+        .keyboard_state = try AtomicSwapper(KeyboardState).init(allocator, keyboard_state),
     };
 }
 
-pub fn mouseState(self: *const Self) MouseState {
-    return self.mouse_state.frontConst(.Acquire).*;
+pub fn deinit(self: *Self) void {
+    self.mouse_state.deinit();
+    self.keyboard_state.deinit();
 }
 
-pub fn keyState(self: *const Self, key: Key) KeyState {
-    return self.keyboard_state.frontConst(.Acquire).getAssertContains(key);
+pub fn mouseState(self: *Self) MouseState {
+    const state = self.mouse_state.acquireFront();
+    defer self.mouse_state.release(state);
+    return state.*;
 }
 
-/// Must be called while no other invocation of `updateMouse` is in progress.
-pub fn updateMouse(self: *Self, pos: zlm.Vec2) void {
-    const back = self.mouse_state.back(.Unordered);
-    if (back.pos) |p| back.delta = pos.sub(p);
-    back.pos = pos;
-
-    self.mouse_state.swap(.Release);
-    self.mouse_state.back(.Unordered).* = self.mouse_state.front(.Unordered).*;
+pub fn keyState(self: *Self, key: Key) KeyState {
+    const state = self.keyboard_state.acquireFront();
+    defer self.keyboard_state.release(state);
+    return state.getAssertContains(key);
 }
 
-/// Must be called while no other invocation of `updateKey` is in progress.
-pub fn updateKey(self: *Self, key: Key, state: KeyState) void {
-    const key_state = self.keyboard_state.back(.Unordered).getPtrAssertContains(key);
+pub fn updateMouse(self: *Self, pos: zlm.Vec2) !void {
+    const ref = blk: {
+        const prev_data = self.mouse_state.acquireFront();
+        defer self.mouse_state.release(prev_data);
+
+        const ref = try self.mouse_state.createRef();
+        ref.data = prev_data.*;
+        break :blk ref;
+    };
+    defer self.mouse_state.swapFront(ref);
+
+    if (ref.data.pos) |p| ref.data.delta = pos.sub(p);
+    ref.data.pos = pos;
+}
+
+pub fn updateKey(self: *Self, key: Key, state: KeyState) !void {
+    const ref = blk: {
+        const prev_data = self.keyboard_state.acquireFront();
+        defer self.keyboard_state.release(prev_data);
+
+        const ref = try self.keyboard_state.createRef();
+        ref.data = prev_data.*;
+        break :blk ref;
+    };
+    defer self.keyboard_state.swapFront(ref);
+    const data = &ref.data;
+
+    const key_state = data.getPtrAssertContains(key);
     key_state.* = state;
-
-    self.keyboard_state.swap(.Release);
-    self.keyboard_state.back(.Unordered).* = self.keyboard_state.front(.Unordered).*;
 }
 
 pub const MouseState = struct {

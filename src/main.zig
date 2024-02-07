@@ -248,6 +248,9 @@ pub fn main() !void {
 
     var extent = vk.Extent2D{ .width = 800, .height = 600 };
 
+    var input = try InputContext.init(allocator);
+    defer input.deinit();
+
     c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
     const window = c.glfwCreateWindow(
         @intCast(extent.width),
@@ -257,8 +260,6 @@ pub fn main() !void {
         null,
     ) orelse return error.WindowInitFailed;
     defer c.glfwDestroyWindow(window);
-
-    var input = InputContext.init();
 
     _ = c.glfwSetWindowUserPointer(window, &input);
     _ = c.glfwSetCursorPosCallback(window, glfwCursorPosCallback);
@@ -653,7 +654,9 @@ fn glfwErrorCallback(error_code: c_int, description: [*c]const u8) callconv(.C) 
 
 fn glfwCursorPosCallback(window: ?*c.GLFWwindow, x: f64, y: f64) callconv(.C) void {
     const input: *InputContext = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window).?));
-    input.updateMouse(vec2(@floatCast(x), @floatCast(y)));
+    input.updateMouse(vec2(@floatCast(x), @floatCast(y))) catch |err| {
+        std.log.err("Failed to update mouse state: {}", .{err});
+    };
 }
 
 var glfw_scancode_cache: std.EnumMap(InputContext.Key, c_int) = .{};
@@ -682,7 +685,9 @@ fn glfwKeyCallback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: 
         };
 
         const input: *InputContext = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window).?));
-        input.updateKey(k, input_state);
+        input.updateKey(k, input_state) catch |err| {
+            std.log.err("Failed to update keyboard state: {}", .{err});
+        };
     }
 }
 
