@@ -430,8 +430,9 @@ pub fn main() !void {
 
         game.updateInput(mouse_pos, input.keyState(.escape).isDown());
         const tick_result = game.tick(frame_timer.lap());
-        for (tick_result.sound_list) |hash| {
-            try ac.playSound(hash);
+        var sound_iterator = tick_result.sound_list.iterator();
+        while (sound_iterator.next()) |kv| {
+            try ac.playSound(kv.key_ptr);
         }
 
         // Don't present or resize swapchain while the window is minimized

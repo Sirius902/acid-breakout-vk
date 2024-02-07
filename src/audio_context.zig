@@ -223,7 +223,12 @@ pub const AudioContext = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
-        c.alListenerf(c.AL_GAIN, self.getListenerGain());
+        // TODO: Only allow a fixed number of the same sound to be playing at once.
+        // Try to spare the player's hearing.
+        const expected_source_count = @min(@max(1, self.sources.len + self.sound_queue.len) - 1, max_sources);
+        const gain_factor = 1.0 - @min(1.0 - 0.015, @log2(@as(f32, @floatFromInt(expected_source_count)) / 16 + 1.0));
+
+        c.alListenerf(c.AL_GAIN, self.getListenerGain() * gain_factor);
         try checkAlError();
 
         self.removeFinishedSources();

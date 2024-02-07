@@ -20,7 +20,7 @@ pub const log = std.log.scoped(.game);
 pub const DrawList = @import("DrawList.zig");
 
 pub const TickResult = struct {
-    sound_list: []*const Sound.Hash,
+    sound_list: *const std.AutoHashMap(Sound.Hash, usize),
 };
 
 pub const Game = struct {
@@ -42,7 +42,7 @@ pub const Game = struct {
     strip: Strip,
     balls: BallList,
     ball_node_pool: MemoryPool(BallList.Node),
-    sound_list: std.ArrayList(*const Sound.Hash),
+    sound_list: std.AutoHashMap(Sound.Hash, usize),
     prng: Prng,
 
     pub const target_dt = 1.0 / 60.0;
@@ -66,9 +66,12 @@ pub const Game = struct {
             .strip = undefined,
             .balls = .{},
             .ball_node_pool = MemoryPool(BallList.Node).init(allocator),
-            .sound_list = std.ArrayList(*const Sound.Hash).init(allocator),
+            .sound_list = std.AutoHashMap(Sound.Hash, usize).init(allocator),
             .prng = Prng.init(0xDEADBEEFC0FFEE),
         };
+        errdefer self.ball_node_pool.deinit();
+        errdefer self.sound_list.deinit();
+
         self.paddle = Paddle.spawn(&self);
         self.strip = Strip.spawn(&self);
         self.spawnBall(.{ .random_x_vel = false, .delay = 1 });
@@ -94,7 +97,7 @@ pub const Game = struct {
         self.dt = @min(ticktime_s, max_dt);
         self.avg_dt = alpha * self.dt + (1 - alpha) * self.avg_dt;
 
-        if (self.is_paused) return .{ .sound_list = self.sound_list.items };
+        if (self.is_paused) return .{ .sound_list = &self.sound_list };
 
         self.time += ticktime_s;
         self.paddle.tick(self);
@@ -112,7 +115,7 @@ pub const Game = struct {
             }
         }
 
-        return .{ .sound_list = self.sound_list.items };
+        return .{ .sound_list = &self.sound_list };
     }
 
     pub fn draw(self: *const Game, draw_list: *DrawList) DrawList.Error!void {
@@ -150,9 +153,11 @@ pub const Game = struct {
     }
 
     pub fn playSound(self: *Game, sound: *const Sound) void {
-        self.sound_list.append(&sound.hash) catch |err| {
-            log.err("Failure adding to sound list: {}", .{err});
+        const count = self.sound_list.getOrPutValue(sound.hash, 0) catch |err| {
+            log.err("Failed to add sound: {}", .{err});
+            return;
         };
+        count.value_ptr.* += 1;
     }
 
     pub fn spawnBall(self: *Game, params: Ball.SpawnParams) void {
