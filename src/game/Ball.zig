@@ -145,9 +145,10 @@ fn handleCollision(self: *Self, game: *Game) ?Vec2 {
     }
 
     if (self.is_hit and target_rect.overlaps(game.strip.rect)) {
-        game.strip.notifyCollision(game, target_pos);
-        self.vel.y *= -1;
-        return target_pos;
+        if (game.strip.notifyCollision(game, target_pos)) {
+            self.vel.y *= -1;
+            return target_pos;
+        }
     }
 
     const game_rect = game.rect();

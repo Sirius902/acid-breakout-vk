@@ -26,6 +26,7 @@ pub const TickResult = struct {
 pub const Game = struct {
     allocator: Allocator,
     tick_arena: ArenaAllocator,
+    game_arena: ArenaAllocator,
     /// The time elapsed from the previous tick to the current tick in seconds.
     dt: f32,
     time: f32,
@@ -54,6 +55,7 @@ pub const Game = struct {
         var self: Game = .{
             .allocator = allocator,
             .tick_arena = ArenaAllocator.init(allocator),
+            .game_arena = ArenaAllocator.init(allocator),
             .dt = target_dt,
             .time = 0,
             .avg_dt = target_dt,
@@ -81,6 +83,7 @@ pub const Game = struct {
 
     pub fn deinit(self: *Game) void {
         self.tick_arena.deinit();
+        self.game_arena.deinit();
         self.ball_node_pool.deinit();
         self.sound_list.deinit();
     }
