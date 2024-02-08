@@ -74,10 +74,7 @@ pub const Game = struct {
         errdefer self.ball_node_pool.deinit();
         errdefer self.sound_list.deinit();
 
-        self.paddle = Paddle.spawn(&self);
-        self.strip = Strip.spawn(&self);
-        self.spawnBall(.{ .random_x_vel = false, .delay = 1 });
-
+        self.setup();
         return self;
     }
 
@@ -86,6 +83,17 @@ pub const Game = struct {
         self.game_arena.deinit();
         self.ball_node_pool.deinit();
         self.sound_list.deinit();
+    }
+
+    pub fn reset(self: *Game, size: Vec2u) void {
+        _ = self.game_arena.reset(.retain_capacity);
+        _ = self.ball_node_pool.reset(.retain_capacity);
+
+        self.time = 0;
+        self.size = size;
+        self.balls = .{};
+
+        self.setup();
     }
 
     /// Simulates one tick of the game.
@@ -185,5 +193,11 @@ pub const Game = struct {
     /// Returns the game's average ticks per second.
     pub fn averageTps(self: *const Game) f64 {
         return 1.0 / self.avg_dt;
+    }
+
+    fn setup(self: *Game) void {
+        self.paddle = Paddle.spawn(self);
+        self.strip = Strip.spawn(self);
+        self.spawnBall(.{ .random_x_vel = false, .delay = 1 });
     }
 };

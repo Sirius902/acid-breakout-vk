@@ -13,6 +13,7 @@ const InputContext = @import("InputContext.zig");
 const Game = @import("game/game.zig").Game;
 const DrawList = @import("game/game.zig").DrawList;
 const Allocator = std.mem.Allocator;
+const MemoryPoolExtra = std.heap.MemoryPoolExtra;
 const Vec2 = zlm.Vec2;
 const Vec3 = zlm.Vec3;
 const Vec4 = zlm.Vec4;
@@ -272,6 +273,19 @@ pub fn main() !void {
     var swapchain = try Swapchain.init(gc, allocator, extent, config.wait_for_vsync);
     defer swapchain.deinit();
 
+    const descriptor_set_binding = vk.DescriptorSetLayoutBinding{
+        .stage_flags = .{ .fragment_bit = true },
+        .descriptor_type = .combined_image_sampler,
+        .binding = 0,
+        .descriptor_count = 1,
+    };
+
+    const descriptor_set_layout = try gc.vkd.createDescriptorSetLayout(gc.dev, &.{
+        .binding_count = 1,
+        .p_bindings = @ptrCast(&descriptor_set_binding),
+    }, null);
+    defer gc.vkd.destroyDescriptorSetLayout(gc.dev, descriptor_set_layout, null);
+
     const push_contant_range = vk.PushConstantRange{
         .stage_flags = .{ .vertex_bit = true, .fragment_bit = true },
         .size = @sizeOf(PushConstants),
@@ -280,8 +294,8 @@ pub fn main() !void {
 
     const pipeline_layout = try gc.vkd.createPipelineLayout(gc.dev, &.{
         .flags = .{},
-        .set_layout_count = 0,
-        .p_set_layouts = undefined,
+        .set_layout_count = 1,
+        .p_set_layouts = @ptrCast(&descriptor_set_layout),
         .push_constant_range_count = 1,
         .p_push_constant_ranges = @ptrCast(&push_contant_range),
     }, null);
@@ -391,6 +405,27 @@ pub fn main() !void {
         for (line_index_buffers) |*b| b.deinit(gc);
         allocator.free(line_index_buffers);
     }
+
+    const pool_sizes = [_]vk.DescriptorPoolSize{
+        .{ .type = .combined_image_sampler, .descriptor_count = @intCast(swapchain.swap_images.len) },
+    };
+
+    const descriptor_pool = try gc.vkd.createDescriptorPool(gc.dev, &.{
+        .flags = .{ .free_descriptor_set_bit = true },
+        .max_sets = @intCast(swapchain.swap_images.len * pool_sizes.len),
+        .pool_size_count = @intCast(pool_sizes.len),
+        .p_pool_sizes = &pool_sizes,
+    }, null);
+    defer gc.vkd.destroyDescriptorPool(gc.dev, descriptor_pool, null);
+
+    var mask_pool = try MemoryPoolExtra(std.DoublyLinkedList(MaskNode).Node, .{ .growable = false }).initPreheated(allocator, swapchain.swap_images.len);
+    defer mask_pool.deinit();
+
+    var masks = std.DoublyLinkedList(MaskNode){};
+    defer while (masks.pop()) |node| {
+        node.data.buffer.deinit(gc);
+        node.data.mask.deinit(gc, descriptor_pool);
+    };
 
     var ac = try AudioContext.init(allocator);
     defer ac.deinit();
@@ -504,10 +539,21 @@ pub fn main() !void {
                 }
 
                 {
+                    const pixels_freed_text = try std.fmt.allocPrint(allocator, "Pixels Freed: {} / {}", .{ game.strip.numPixelsRemaining(), game.strip.numTotalPixels() });
+                    defer allocator.free(pixels_freed_text);
+
+                    c.igTextUnformatted(pixels_freed_text.ptr, @as([*]u8, pixels_freed_text.ptr) + pixels_freed_text.len);
+                }
+
+                {
                     const particle_count_text = try std.fmt.allocPrint(allocator, "Particle Count: {}", .{game.balls.len});
                     defer allocator.free(particle_count_text);
 
                     c.igTextUnformatted(particle_count_text.ptr, @as([*]u8, particle_count_text.ptr) + particle_count_text.len);
+                }
+
+                if (c.igButton("Reset Game", .{ .x = 0, .y = 0 })) {
+                    game.reset(vec2u(extent.width, extent.height));
                 }
 
                 if (c.igCheckbox("Wait for VSync", &config.wait_for_vsync)) {
@@ -569,13 +615,16 @@ pub fn main() !void {
 
         const cmdbuf = cmdbufs[swapchain.image_index];
         const rect_instance_buffer = &rect_instance_buffers[swapchain.image_index];
+        const masked_rects_start = draw_data.rects.items.len;
+        const num_rects = masked_rects_start + draw_data.masked_rects.items.len;
         if (draw_data.rects.items.len > 0) {
-            try rect_instance_buffer.ensureTotalCapacity(gc, draw_data.rects.items.len);
+            try rect_instance_buffer.ensureTotalCapacity(gc, num_rects);
             const gpu_instances = try rect_instance_buffer.map(gc);
             defer rect_instance_buffer.unmap(gc);
             @memcpy(gpu_instances, draw_data.rects.items);
+            @memcpy(gpu_instances + masked_rects_start, draw_data.masked_rects.items);
         }
-        rect_instance_buffer.len = draw_data.rects.items.len;
+        rect_instance_buffer.len = num_rects;
 
         const point_vertex_buffer = &point_vertex_buffers[swapchain.image_index];
         if (draw_data.point_verts.items.len > 0) {
@@ -604,6 +653,59 @@ pub fn main() !void {
         }
         line_index_buffer.len = draw_data.line_indices.items.len;
 
+        {
+            var node = masks.first;
+            while (node) |n| {
+                const next = n.next;
+                defer node = next;
+
+                n.data.frames_lived += 1;
+                if (n.data.frames_lived >= swapchain.swap_images.len) {
+                    masks.remove(n);
+                    n.data.buffer.deinit(gc);
+                    n.data.mask.deinit(gc, descriptor_pool);
+                    mask_pool.destroy(n);
+                }
+            }
+        }
+
+        // TODO: Put in arena?
+        var rect_masks = std.ArrayList(*const MaskNode).init(allocator);
+        defer rect_masks.deinit();
+
+        for (draw_data.rect_masks.items) |rect_mask| {
+            var mask = Mask.init(gc, descriptor_set_layout, descriptor_pool, .{
+                .width = rect_mask.width,
+                .height = rect_mask.height,
+            }) catch |err| {
+                std.log.err("Failed to create mask: {}", .{err});
+                return err;
+            };
+            errdefer mask.deinit(gc, descriptor_pool);
+
+            var buffer = try Buffer(u8).initWithCapacity(gc, rect_mask.pixels.len, .{
+                .usage = .{ .transfer_src_bit = true },
+                .sharing_mode = .exclusive,
+                .mem_flags = .{ .host_visible_bit = true, .host_coherent_bit = true },
+            });
+            errdefer buffer.deinit(gc);
+
+            {
+                const gpu_pixels = try buffer.map(gc);
+                defer buffer.unmap(gc);
+                @memcpy(gpu_pixels, rect_mask.pixels);
+            }
+
+            const node = try mask_pool.create();
+            errdefer mask_pool.destroy(node);
+            node.data = .{ .mask = mask, .buffer = buffer };
+
+            masks.append(node);
+            errdefer masks.remove(node);
+
+            try rect_masks.append(&node.data);
+        }
+
         try recordCommandBuffer(
             gc,
             &ic,
@@ -611,6 +713,8 @@ pub fn main() !void {
             &rect_vertex_buffer,
             &rect_index_buffer,
             rect_instance_buffer,
+            masked_rects_start,
+            rect_masks.items,
             point_vertex_buffer,
             line_vertex_buffer,
             line_index_buffer,
@@ -799,6 +903,8 @@ fn Buffer(comptime T: type) type {
 // TODO: Arena for draw data?
 const DrawData = struct {
     rects: std.ArrayList(Instance),
+    masked_rects: std.ArrayList(Instance),
+    rect_masks: std.ArrayList(DrawList.Mask),
     point_verts: std.ArrayList(PointVertex),
     line_verts: std.ArrayList(PointVertex),
     line_indices: std.ArrayList(u32),
@@ -806,6 +912,8 @@ const DrawData = struct {
     pub fn init(allocator: Allocator) DrawData {
         return .{
             .rects = std.ArrayList(Instance).init(allocator),
+            .masked_rects = std.ArrayList(Instance).init(allocator),
+            .rect_masks = std.ArrayList(DrawList.Mask).init(allocator),
             .point_verts = std.ArrayList(PointVertex).init(allocator),
             .line_verts = std.ArrayList(PointVertex).init(allocator),
             .line_indices = std.ArrayList(u32).init(allocator),
@@ -814,6 +922,8 @@ const DrawData = struct {
 
     pub fn deinit(self: *DrawData) void {
         self.rects.deinit();
+        self.masked_rects.deinit();
+        self.rect_masks.deinit();
         self.point_verts.deinit();
         self.line_verts.deinit();
         self.line_indices.deinit();
@@ -841,11 +951,18 @@ fn executeDrawList(draw_list: *const DrawList, allocator: Allocator) !DrawData {
             .rainbow_scroll => .rainbow_scroll,
         };
 
-        try draw_data.rects.append(.{
+        const instance: Instance = .{
             .model = model,
             .color = color,
             .shading = shading,
-        });
+        };
+
+        if (rect.mask) |mask| {
+            try draw_data.masked_rects.append(instance);
+            try draw_data.rect_masks.append(mask);
+        } else {
+            try draw_data.rects.append(instance);
+        }
     }
 
     for (draw_list.points.items) |point| {
@@ -904,6 +1021,172 @@ fn executeDrawList(draw_list: *const DrawList, allocator: Allocator) !DrawData {
     return draw_data;
 }
 
+const Mask = struct {
+    image: vk.Image,
+    memory: vk.DeviceMemory,
+    view: vk.ImageView,
+    sampler: vk.Sampler,
+    extent: vk.Extent2D,
+    set: vk.DescriptorSet,
+
+    pub fn init(
+        gc: *const GraphicsContext,
+        layout: vk.DescriptorSetLayout,
+        descriptor_pool: vk.DescriptorPool,
+        extent: vk.Extent2D,
+    ) !Mask {
+        var descriptor_set: vk.DescriptorSet = undefined;
+        try gc.vkd.allocateDescriptorSets(gc.dev, &vk.DescriptorSetAllocateInfo{
+            .descriptor_pool = descriptor_pool,
+            .descriptor_set_count = 1,
+            .p_set_layouts = @ptrCast(&layout),
+        }, @ptrCast(&descriptor_set));
+        errdefer gc.vkd.freeDescriptorSets(gc.dev, descriptor_pool, 1, @ptrCast(&descriptor_set)) catch {};
+
+        const format: vk.Format = .r8_unorm;
+        const image = try gc.vkd.createImage(gc.dev, &vk.ImageCreateInfo{
+            .image_type = .@"2d",
+            .format = format,
+            .extent = .{ .width = extent.width, .height = extent.height, .depth = 1 },
+            .mip_levels = 1,
+            .array_layers = 1,
+            .samples = .{ .@"1_bit" = true },
+            .tiling = .optimal,
+            .usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true, .sampled_bit = true },
+            .sharing_mode = .exclusive,
+            .initial_layout = .undefined,
+        }, null);
+        errdefer gc.vkd.destroyImage(gc.dev, image, null);
+
+        const mem_reqs = gc.vkd.getImageMemoryRequirements(gc.dev, image);
+        const memory = try gc.allocate(mem_reqs, .{ .device_local_bit = true });
+        errdefer gc.vkd.freeMemory(gc.dev, memory, null);
+
+        try gc.vkd.bindImageMemory(gc.dev, image, memory, 0);
+
+        const view = try gc.vkd.createImageView(gc.dev, &.{
+            .image = image,
+            .view_type = .@"2d",
+            .format = format,
+            .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        }, null);
+        errdefer gc.vkd.destroyImageView(gc.dev, view, null);
+
+        const sampler = try gc.vkd.createSampler(gc.dev, &vk.SamplerCreateInfo{
+            .mag_filter = .nearest,
+            .min_filter = .nearest,
+            .address_mode_u = .repeat,
+            .address_mode_v = .repeat,
+            .address_mode_w = .repeat,
+            .anisotropy_enable = vk.FALSE,
+            .max_anisotropy = undefined,
+            .border_color = .float_opaque_white,
+            .unnormalized_coordinates = vk.FALSE,
+            .compare_enable = vk.FALSE,
+            .compare_op = .always,
+            .mipmap_mode = .linear,
+            .mip_lod_bias = 0,
+            .min_lod = 0,
+            .max_lod = 0,
+        }, null);
+        errdefer gc.vkd.destroySampler(gc.dev, sampler, null);
+
+        const image_info = vk.DescriptorImageInfo{
+            .image_layout = .shader_read_only_optimal,
+            .image_view = view,
+            .sampler = sampler,
+        };
+        const descriptor_write = vk.WriteDescriptorSet{
+            .dst_set = descriptor_set,
+            .dst_binding = 0,
+            .dst_array_element = 0,
+            .descriptor_type = .combined_image_sampler,
+            .descriptor_count = 1,
+            .p_buffer_info = undefined,
+            .p_texel_buffer_view = undefined,
+            .p_image_info = @ptrCast(&image_info),
+        };
+        gc.vkd.updateDescriptorSets(gc.dev, 1, @ptrCast(&descriptor_write), 0, null);
+
+        return .{
+            .image = image,
+            .memory = memory,
+            .view = view,
+            .sampler = sampler,
+            .set = descriptor_set,
+            .extent = extent,
+        };
+    }
+
+    pub fn deinit(self: *Mask, gc: *const GraphicsContext, pool: vk.DescriptorPool) void {
+        gc.vkd.freeDescriptorSets(gc.dev, pool, 1, @ptrCast(&self.set)) catch {};
+        gc.vkd.destroySampler(gc.dev, self.sampler, null);
+        gc.vkd.destroyImageView(gc.dev, self.view, null);
+        gc.vkd.destroyImage(gc.dev, self.image, null);
+        gc.vkd.freeMemory(gc.dev, self.memory, null);
+    }
+
+    pub fn recordUpload(self: *const Mask, gc: *const GraphicsContext, cmdbuf: vk.CommandBuffer, buffer: vk.Buffer) void {
+        const undefined_to_transfer_barrier = vk.ImageMemoryBarrier{
+            .src_access_mask = .{},
+            .dst_access_mask = .{},
+            .image = self.image,
+            .old_layout = .undefined,
+            .new_layout = .transfer_dst_optimal,
+            .src_queue_family_index = undefined,
+            .dst_queue_family_index = undefined,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+        gc.vkd.cmdPipelineBarrier(cmdbuf, .{ .top_of_pipe_bit = true }, .{ .transfer_bit = true }, .{}, 0, null, 0, null, 1, @ptrCast(&undefined_to_transfer_barrier));
+
+        const region = vk.BufferImageCopy{
+            .buffer_offset = 0,
+            .buffer_row_length = 0,
+            .buffer_image_height = 0,
+            .image_offset = .{ .x = 0, .y = 0, .z = 0 },
+            .image_extent = .{ .width = self.extent.width, .height = self.extent.height, .depth = 1 },
+            .image_subresource = .{
+                .aspect_mask = .{ .color_bit = true },
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+        gc.vkd.cmdCopyBufferToImage(cmdbuf, buffer, self.image, .transfer_dst_optimal, 1, @ptrCast(&region));
+
+        const transfer_to_shader_barrier = vk.ImageMemoryBarrier{
+            .src_access_mask = .{},
+            .dst_access_mask = .{},
+            .image = self.image,
+            .old_layout = .transfer_dst_optimal,
+            .new_layout = .shader_read_only_optimal,
+            .src_queue_family_index = undefined,
+            .dst_queue_family_index = undefined,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+        gc.vkd.cmdPipelineBarrier(cmdbuf, vk.PipelineStageFlags{ .transfer_bit = true }, .{ .fragment_shader_bit = true }, .{}, 0, null, 0, null, 1, @ptrCast(&transfer_to_shader_barrier));
+    }
+};
+
 fn copyBuffer(gc: *const GraphicsContext, pool: vk.CommandPool, dst: vk.Buffer, src: vk.Buffer, size: vk.DeviceSize) !void {
     var cmdbuf: vk.CommandBuffer = undefined;
     try gc.vkd.allocateCommandBuffers(gc.dev, &.{
@@ -959,6 +1242,12 @@ fn destroyCommandBuffers(gc: *const GraphicsContext, pool: vk.CommandPool, alloc
     allocator.free(cmdbufs);
 }
 
+const MaskNode = struct {
+    mask: Mask,
+    buffer: Buffer(u8),
+    frames_lived: usize = 0,
+};
+
 fn recordCommandBuffer(
     gc: *const GraphicsContext,
     ic: *const ImGuiContext,
@@ -966,6 +1255,8 @@ fn recordCommandBuffer(
     rect_vertex_buffer: *const Buffer(Vertex),
     rect_index_buffer: *const Buffer(u16),
     rect_instance_buffer: *const Buffer(Instance),
+    masked_rects_start: usize,
+    rect_masks: []const *const MaskNode,
     point_vertex_buffer: *const Buffer(PointVertex),
     line_vertex_buffer: *const Buffer(PointVertex),
     line_index_buffer: *const Buffer(u32),
@@ -997,6 +1288,10 @@ fn recordCommandBuffer(
     try gc.vkd.resetCommandBuffer(cmdbuf, .{});
     try gc.vkd.beginCommandBuffer(cmdbuf, &.{});
 
+    for (rect_masks) |rect_mask| {
+        rect_mask.mask.recordUpload(gc, cmdbuf, rect_mask.buffer.handle);
+    }
+
     gc.vkd.cmdSetViewport(cmdbuf, 0, 1, @ptrCast(&viewport));
     gc.vkd.cmdSetScissor(cmdbuf, 0, 1, @ptrCast(&scissor));
 
@@ -1018,12 +1313,13 @@ fn recordCommandBuffer(
     else
         vec2(1, aspect_ratio);
 
-    var push_constants: PushConstants = .{
+    const push_constants: PushConstants = .{
         .view = view.mul(zlm.Mat4.createScale(aspect.x, aspect.y, 1)),
         .aspect = aspect,
         .viewport_size = vec2(@floatFromInt(extent.width), @floatFromInt(extent.height)),
         .time = game.time,
     };
+    gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
 
     gc.vkd.cmdBeginRenderPass(cmdbuf, &.{
         .render_pass = render_pass,
@@ -1034,30 +1330,37 @@ fn recordCommandBuffer(
     }, .@"inline");
 
     if (line_vertex_buffer.handle != .null_handle) {
-        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.line);
-        gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
         const line_offsets = [_]vk.DeviceSize{0};
+
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.line);
         gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&line_vertex_buffer.handle), &line_offsets);
         gc.vkd.cmdBindIndexBuffer(cmdbuf, line_index_buffer.handle, 0, .uint32);
         gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(line_index_buffer.len), 1, 0, 0, 0);
     }
 
     if (point_vertex_buffer.handle != .null_handle) {
-        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.point);
-        gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
         const point_offsets = [_]vk.DeviceSize{0};
+
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.point);
         gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, 1, @ptrCast(&point_vertex_buffer.handle), &point_offsets);
         gc.vkd.cmdDraw(cmdbuf, @intCast(point_vertex_buffer.len), 1, 0, 0);
     }
 
     if (rect_instance_buffer.handle != .null_handle) {
-        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.rect);
-        gc.vkd.cmdPushConstants(cmdbuf, pipeline_layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @sizeOf(PushConstants), @ptrCast(&push_constants));
         const rect_offsets = [_]vk.DeviceSize{ 0, 0 };
         const rect_vertex_buffers = [_]vk.Buffer{ rect_vertex_buffer.handle, rect_instance_buffer.handle };
+
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.rect);
         gc.vkd.cmdBindVertexBuffers(cmdbuf, 0, rect_vertex_buffers.len, &rect_vertex_buffers, &rect_offsets);
         gc.vkd.cmdBindIndexBuffer(cmdbuf, rect_index_buffer.handle, 0, .uint16);
-        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(rect_index_buffer.len), @intCast(rect_instance_buffer.len), 0, 0, 0);
+
+        gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(rect_index_buffer.len), @intCast(rect_instance_buffer.len - masked_rects_start), 0, 0, 0);
+
+        gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.mask_rect);
+        for (masked_rects_start..rect_instance_buffer.len, rect_masks) |i, rect_mask| {
+            gc.vkd.cmdBindDescriptorSets(cmdbuf, .graphics, pipeline_layout, 0, 1, @ptrCast(&rect_mask.mask.set), 0, null);
+            gc.vkd.cmdDrawIndexed(cmdbuf, @intCast(rect_index_buffer.len), 1, 0, 0, @intCast(i));
+        }
     }
 
     ic.drawTexture(cmdbuf);
@@ -1070,6 +1373,7 @@ const Pipelines = struct {
     rect: vk.Pipeline,
     point: vk.Pipeline,
     line: vk.Pipeline,
+    mask_rect: vk.Pipeline,
 };
 
 fn createPipelines(gc: *const GraphicsContext, layout: vk.PipelineLayout, render_pass: vk.RenderPass) !Pipelines {
@@ -1106,13 +1410,23 @@ fn createPipelines(gc: *const GraphicsContext, layout: vk.PipelineLayout, render
     const line = try createPipeline(PointVertex, null, gc, layout, render_pass, line_vert, frag, .line_list);
     errdefer gc.vkd.destroyPipeline(gc.dev, line, null);
 
-    return .{ .rect = rect, .point = point, .line = line };
+    const mask_frag = try gc.vkd.createShaderModule(gc.dev, &.{
+        .code_size = shaders.mask_frag.len,
+        .p_code = @as([*]const u32, @ptrCast(&shaders.mask_frag)),
+    }, null);
+    defer gc.vkd.destroyShaderModule(gc.dev, mask_frag, null);
+
+    const mask_rect = try createPipeline(Vertex, Instance, gc, layout, render_pass, rect_vert, mask_frag, .triangle_list);
+    errdefer gc.vkd.destroyPipeline(gc.dev, mask_rect, null);
+
+    return .{ .rect = rect, .point = point, .line = line, .mask_rect = mask_rect };
 }
 
 fn destroyPipelines(pipelines: Pipelines, gc: *const GraphicsContext) void {
     gc.vkd.destroyPipeline(gc.dev, pipelines.rect, null);
     gc.vkd.destroyPipeline(gc.dev, pipelines.point, null);
     gc.vkd.destroyPipeline(gc.dev, pipelines.line, null);
+    gc.vkd.destroyPipeline(gc.dev, pipelines.mask_rect, null);
 }
 
 fn createFramebuffers(gc: *const GraphicsContext, allocator: Allocator, render_pass: vk.RenderPass, swapchain: Swapchain) ![]vk.Framebuffer {

@@ -107,6 +107,8 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .cmdBindIndexBuffer = true,
     .cmdDrawIndexed = true,
     .cmdPushConstants = true,
+    .cmdCopyBufferToImage = true,
+    .cmdPipelineBarrier = true,
 });
 
 pub const GraphicsContext = struct {

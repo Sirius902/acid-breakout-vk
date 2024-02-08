@@ -9,6 +9,7 @@ layout(location = 7) in uint inShading;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out uint shading;
+layout(location = 2) out vec2 uv;
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
@@ -21,4 +22,5 @@ void main() {
     gl_Position = pc.view * inModel * vec4(inPosition, 0.0, 1.0);
     fragColor = inColor;
     shading = inShading;
+    uv = inUV;
 }

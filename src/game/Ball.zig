@@ -144,7 +144,7 @@ fn handleCollision(self: *Self, game: *Game) ?Vec2 {
         return target_pos;
     }
 
-    if (self.is_hit and target_rect.overlaps(game.strip.rect)) {
+    if (self.is_hit and game.strip.rect.contains(target_pos)) {
         if (game.strip.notifyCollision(game, target_pos)) {
             self.vel.y *= -1;
             return target_pos;

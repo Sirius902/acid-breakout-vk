@@ -278,7 +278,7 @@ const ExternalFramebuffer = struct {
             .array_layers = 1,
             .samples = .{ .@"1_bit" = true },
             .tiling = .optimal,
-            .usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true, .sampled_bit = true },
+            .usage = .{ .color_attachment_bit = true, .sampled_bit = true },
             .sharing_mode = .exclusive,
             .initial_layout = .undefined,
         }, null);

@@ -6,6 +6,7 @@ layout(location = 2) in uint inShading;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out uint shading;
+layout(location = 2) out vec2 uv;
 
 layout(push_constant) uniform PushConstants {
     mat4 view;

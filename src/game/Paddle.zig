@@ -21,8 +21,10 @@ pub fn spawn(game: *Game) Self {
 }
 
 pub fn tick(self: *Self, game: *Game) void {
-    if (game.mouse_pos) |pos| {
-        self.center_x = pos.x;
+    if (game.cursor_delta.length() > 0) {
+        if (game.mouse_pos) |pos| {
+            self.center_x = pos.x;
+        }
     }
 
     self.moveInBounds(game);

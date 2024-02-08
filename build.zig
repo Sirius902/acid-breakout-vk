@@ -166,6 +166,7 @@ fn linkShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
     shaders.add("point_vert", "src/shaders/point.vert", .{});
     shaders.add("line_vert", "src/shaders/point.vert", .{ .args = &.{"-DIS_LINE"} });
     shaders.add("main_frag", "src/shaders/main.frag", .{});
+    shaders.add("mask_frag", "src/shaders/main.frag", .{ .args = &.{"-DUSE_PIXEL_MASK"} });
     shaders.add("imgui_vert", "src/shaders/imgui.vert", .{});
     shaders.add("imgui_frag", "src/shaders/imgui.frag", .{});
     compile.root_module.addImport("shaders", shaders.getModule());

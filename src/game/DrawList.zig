@@ -38,10 +38,17 @@ pub const Shading = union(ShadingMethod) {
     rainbow_scroll: Alpha,
 };
 
+pub const Mask = struct {
+    width: u32,
+    height: u32,
+    pixels: []const u8,
+};
+
 pub const Rect = struct {
     min: Vec2,
     max: Vec2,
     shading: Shading,
+    mask: ?Mask = null,
 
     pub fn center(self: Rect) Vec2 {
         return self.min.add(self.max).scale(0.5);
@@ -120,4 +127,8 @@ pub fn endPath(self: *Self) Error!void {
     const points = try self.arena.allocator().dupe(Point, self.path_buf.items);
     try self.paths.append(.{ .points = points });
     self.path_buf.clearRetainingCapacity();
+}
+
+pub fn dupe(self: *Self, comptime T: type, m: []const T) Error![]T {
+    return self.arena.allocator().dupe(T, m);
 }
