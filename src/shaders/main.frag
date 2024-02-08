@@ -13,12 +13,13 @@ layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
+    vec2 aspect;
     vec2 viewport_size;
     float time;
 } pc;
 
 void main() {
-    vec2 pos = gl_FragCoord.xy / pc.viewport_size;
+    vec2 pos = (gl_FragCoord.xy / pc.viewport_size - 0.5) / pc.aspect + 0.5;
 
     switch (shading) {
         case SHADING_COLOR:

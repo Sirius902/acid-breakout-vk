@@ -157,6 +157,7 @@ const PointVertex = struct {
 
 const PushConstants = extern struct {
     view: zlm.Mat4,
+    aspect: zlm.Vec2,
     viewport_size: zlm.Vec2,
     time: f32,
 };
@@ -422,11 +423,17 @@ pub fn main() !void {
         var fh: c_int = undefined;
         c.glfwGetFramebufferSize(window, &fw, &fh);
 
-        const mouse_state = input.mouseState();
-        const mouse_pos = if (mouse_state.pos) |p|
-            p.mul(math.vec2Cast(f32, game.size)).div(window_size)
-        else
-            null;
+        // Scale mouse position to correspond to game units within the aspected viewport.
+        const mouse_pos = if (input.mouseState().pos) |p| blk: {
+            const game_size = math.vec2Cast(f32, game.size);
+            const unit_pos = p.div(window_size).mul(vec2(1, -1)).add(vec2(0, 1)).sub(zlm.Vec2.one.scale(0.5));
+            const aspect_ratio = (window_size.x / game_size.x) / (window_size.y / game_size.y);
+            const scaled_pos = if (ww >= wh)
+                unit_pos.mul(vec2(game_size.x * aspect_ratio, game_size.y))
+            else
+                unit_pos.mul(vec2(game_size.x, game_size.y / aspect_ratio));
+            break :blk scaled_pos.add(game_size.scale(0.5));
+        } else null;
 
         game.updateInput(mouse_pos, input.keyState(.escape).isDown());
         const tick_result = game.tick(frame_timer.lap());
@@ -1003,10 +1010,17 @@ fn recordCommandBuffer(
 
     const game_size = math.vec2Cast(f32, game.size);
     // Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
-    const view = zlm.Mat4.createOrthogonal(0, game_size.x, game_size.y, 0, 0, 100);
+    const view = zlm.Mat4.createOrthogonal(0, game_size.x, game_size.y, 0, 0, 1);
+
+    const aspect_ratio = (viewport.width / game_size.x) / (viewport.height / game_size.y);
+    const aspect = if (viewport.width >= viewport.height)
+        vec2(1.0 / aspect_ratio, 1)
+    else
+        vec2(1, aspect_ratio);
+
     var push_constants: PushConstants = .{
-        .view = view,
-        // TODO: Maintain game aspect ratio and use game size.
+        .view = view.mul(zlm.Mat4.createScale(aspect.x, aspect.y, 1)),
+        .aspect = aspect,
         .viewport_size = vec2(@floatFromInt(extent.width), @floatFromInt(extent.height)),
         .time = game.time,
     };

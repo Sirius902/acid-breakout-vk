@@ -9,6 +9,7 @@ layout(location = 1) out uint shading;
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
+    vec2 aspect;
     vec2 viewport_size;
     float time;
 } pc;
