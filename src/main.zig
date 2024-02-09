@@ -539,10 +539,10 @@ pub fn main() !void {
                 }
 
                 {
-                    const pixels_freed_text = try std.fmt.allocPrint(allocator, "Pixels Freed: {} / {}", .{ game.strip.numPixelsRemaining(), game.strip.numTotalPixels() });
-                    defer allocator.free(pixels_freed_text);
+                    const pixels_remaining_text = try std.fmt.allocPrint(allocator, "Pixels Remaining: {} / {}", .{ game.strip.numPixelsRemaining(), game.strip.numTotalPixels() });
+                    defer allocator.free(pixels_remaining_text);
 
-                    c.igTextUnformatted(pixels_freed_text.ptr, @as([*]u8, pixels_freed_text.ptr) + pixels_freed_text.len);
+                    c.igTextUnformatted(pixels_remaining_text.ptr, @as([*]u8, pixels_remaining_text.ptr) + pixels_remaining_text.len);
                 }
 
                 {
