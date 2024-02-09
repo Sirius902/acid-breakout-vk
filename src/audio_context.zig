@@ -19,6 +19,7 @@ pub const AudioContext = struct {
     free_sources: SourceList,
     source_nodes: [max_sources]SourceList.Node,
     source_buf: [max_sources]c.ALuint,
+    sound_counts: std.AutoHashMap(Sound.Hash, usize),
     prng: Prng,
 
     thread: ?std.Thread,
@@ -33,19 +34,22 @@ pub const AudioContext = struct {
     pub const default_listener_gain = 1.0;
     pub const default_source_pitch_variance = 0.05;
 
-    const Cache = std.AutoHashMap(Sound.Hash, CacheEntry);
-
     const CacheEntry = struct {
         sound: *const Sound,
         buffer: c.ALuint,
     };
+    const Cache = std.AutoHashMap(Sound.Hash, CacheEntry);
 
-    const Queue = std.DoublyLinkedList(c.ALuint);
-    const SourceList = std.DoublyLinkedList(c.ALuint);
+    const QueueItem = struct { buffer: c.ALuint, sound: *const Sound };
+    const Queue = std.DoublyLinkedList(QueueItem);
+
+    const Source = struct { handle: c.ALuint, sound: *const Sound };
+    const SourceList = std.DoublyLinkedList(Source);
 
     const Prng = std.rand.DefaultPrng;
 
     const max_sources = 64;
+    const max_sounds_of_type = 3;
     const poll_time = 16 * std.time.ns_per_ms;
 
     pub fn init(allocator: Allocator) !*AudioContext {
@@ -83,6 +87,7 @@ pub const AudioContext = struct {
             .free_sources = .{},
             .source_nodes = undefined,
             .source_buf = source_buf,
+            .sound_counts = std.AutoHashMap(Sound.Hash, usize).init(allocator),
             .prng = Prng.init(0xC0FFEEBABE26),
             .thread = null,
             .stop_flag = std.atomic.Value(bool).init(false),
@@ -95,7 +100,7 @@ pub const AudioContext = struct {
         };
 
         for (&self.source_nodes, &source_buf) |*node, source| {
-            node.data = source;
+            node.data = .{ .handle = source, .sound = undefined };
             self.free_sources.append(node);
         }
 
@@ -115,6 +120,8 @@ pub const AudioContext = struct {
 
         c.alSourceStopv(@intCast(self.source_buf.len), &self.source_buf);
         c.alDeleteSources(@intCast(self.source_buf.len), &self.source_buf);
+
+        self.sound_counts.deinit();
 
         c.alDeleteBuffers(@intCast(self.buffer_buf.items.len), self.buffer_buf.items.ptr);
         self.buffer_buf.deinit();
@@ -140,7 +147,7 @@ pub const AudioContext = struct {
         return std.math.approxEqAbs(f32, self.getListenerGain(), 0, std.math.floatEps(f32));
     }
 
-    pub fn getSourcePitchVariance(self: *AudioContext) f32 {
+    pub fn getSourcePitchVariance(self: *const AudioContext) f32 {
         return self.source_pitch_variance.load(.Acquire);
     }
 
@@ -194,7 +201,7 @@ pub const AudioContext = struct {
         defer self.rwlock.unlock();
 
         const node = self.sound_queue_free.pop() orelse return;
-        node.data = entry.buffer;
+        node.data = .{ .buffer = entry.buffer, .sound = entry.sound };
         self.sound_queue.append(node);
     }
 
@@ -223,9 +230,8 @@ pub const AudioContext = struct {
         self.rwlock.lock();
         defer self.rwlock.unlock();
 
-        // TODO: Only allow a fixed number of the same sound to be playing at once.
         // Try to spare the player's hearing.
-        const expected_source_count = @min(@max(1, self.sources.len + self.sound_queue.len) - 1, max_sources);
+        const expected_source_count = @min(@max(1, self.sources.len) - 1, max_sources);
         const gain_factor = 1.0 - @min(1.0 - 0.015, @log2(@as(f32, @floatFromInt(expected_source_count)) / 16 + 1.0));
 
         c.alListenerf(c.AL_GAIN, self.getListenerGain() * gain_factor);
@@ -244,14 +250,16 @@ pub const AudioContext = struct {
             defer source_node = next;
 
             var err_occured = false;
-            c.alGetSourcei(node.data, c.AL_SOURCE_STATE, &state);
+            c.alGetSourcei(node.data.handle, c.AL_SOURCE_STATE, &state);
             checkAlError() catch |err| {
-                log.err("Error checking source {} state: {}", .{ node.data, err });
+                log.err("Error checking source {} state: {}", .{ node.data.handle, err });
                 err_occured = true;
             };
 
             if (is_muted or state != c.AL_PLAYING or err_occured) {
                 self.destroySource(node);
+                const count = self.sound_counts.getPtr(node.data.sound.hash) orelse unreachable;
+                count.* -= 1;
             }
         }
     }
@@ -267,12 +275,31 @@ pub const AudioContext = struct {
         while (self.sound_queue.pop()) |node| {
             defer self.sound_queue_free.append(node);
 
-            const buffer = node.data;
+            const count = try self.sound_counts.getOrPutValue(node.data.sound.hash, 0);
+            if (count.value_ptr.* >= max_sounds_of_type) {
+                var source_node = self.sources.first;
+                while (source_node) |n| {
+                    const next = n.next;
+                    defer source_node = next;
+
+                    if (std.mem.eql(u8, &n.data.sound.hash, &node.data.sound.hash)) {
+                        c.alSourceStop(n.data.handle);
+                        checkAlError() catch |err| std.debug.panic("Failed to stop source 0x{}: {}", .{ node.data, err });
+
+                        try self.playEffect(n.data.handle, node.data.buffer, 1);
+                        return;
+                    }
+                }
+
+                unreachable;
+            }
+
             const source_node = self.nextSource();
             errdefer self.destroySource(source_node);
+            source_node.data.sound = node.data.sound;
 
-            const pitch = 1 + self.getSourcePitchVariance() * (self.prng.random().float(f32) - 0.5);
-            try playSource(source_node.data, buffer, pitch, 1);
+            try self.playEffect(source_node.data.handle, node.data.buffer, 1);
+            count.value_ptr.* += 1;
         }
     }
 
@@ -283,18 +310,23 @@ pub const AudioContext = struct {
         }
         // Recycle oldest source.
         const node = self.sources.first orelse unreachable;
-        c.alSourceStop(node.data);
+        c.alSourceStop(node.data.handle);
         checkAlError() catch |err| std.debug.panic("Failed to stop source 0x{}: {}", .{ node.data, err });
         return node;
     }
 
     fn destroySource(self: *AudioContext, node: *SourceList.Node) void {
-        c.alSourceStop(node.data);
+        c.alSourceStop(node.data.handle);
         checkAlError() catch |err| {
-            log.warn("Failed to stop source {X}: {}", .{ node.data, err });
+            log.warn("Failed to stop source {X}: {}", .{ node.data.handle, err });
         };
         self.sources.remove(node);
         self.free_sources.append(node);
+    }
+
+    fn playEffect(self: *AudioContext, source: c.ALuint, buffer: c.ALuint, gain: f32) !void {
+        const pitch = 1 + self.getSourcePitchVariance() * (self.prng.random().float(f32) - 0.5);
+        try playSource(source, buffer, pitch, gain);
     }
 
     fn playSource(source: c.ALuint, buffer: c.ALuint, pitch: f32, gain: f32) !void {
