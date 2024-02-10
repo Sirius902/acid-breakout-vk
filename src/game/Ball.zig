@@ -104,7 +104,7 @@ pub fn draw(self: *const Self, game: *const Game, draw_list: *DrawList) DrawList
         }
     }
 
-    try draw_list.addPoint(.{ .pos = self.pos, .shading = .{ .color = vec4(r, g, b, 1) } });
+    if (!self.is_hit) try draw_list.addPoint(.{ .pos = self.pos, .shading = .{ .color = vec4(r, g, b, 1) } });
 }
 
 fn isVisible(self: *const Self, game: *const Game) bool {
