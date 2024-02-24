@@ -168,6 +168,9 @@ const Config = struct {
     is_config_open: bool = true,
     volume: ?f32 = null,
     pitch_variance: ?f32 = null,
+    dev: struct {
+        ball_spawn_count: usize = 8000,
+    } = .{},
 
     pub const file_name = "acid-breakout.json";
 
@@ -589,6 +592,32 @@ pub fn main() !void {
 
                 if (c.igButton("Play Sound", .{ .x = 0, .y = 0 })) {
                     ac.playSound(&assets.ball_reflect.hash) catch |err| std.log.err("Failed to play sound: {}", .{err});
+                }
+
+                {
+                    var input_buf: [math.maxDigits(usize) + 1]u8 = undefined;
+                    _ = std.fmt.bufPrintZ(&input_buf, "{}", .{config.dev.ball_spawn_count}) catch unreachable;
+
+                    if (c.igInputText("Spawn Count", &input_buf, input_buf.len, 0, null, null)) {
+                        const str = std.mem.span(@as([*:0]u8, @ptrCast(&input_buf)));
+                        if (!std.mem.containsAtLeast(u8, str, 1, "_")) {
+                            if (std.fmt.parseInt(usize, str, 10)) |n| {
+                                config.dev.ball_spawn_count = n;
+                                is_save_config = true;
+                            } else |_| {}
+                        }
+                    }
+                }
+
+                if (c.igButton("Spawn Particles", .{ .x = 0, .y = 0 })) {
+                    const size_f = math.vec2Cast(f32, game.size);
+                    for (0..config.dev.ball_spawn_count) |i| {
+                        const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(config.dev.ball_spawn_count));
+                        game.spawnBall(.{
+                            .start_pos = vec2(std.math.lerp(0.0, size_f.x, t), 0.5 * size_f.y),
+                            .random_x_vel = false,
+                        });
+                    }
                 }
 
                 if (c.igButton("Open Demo Window", .{ .x = 0, .y = 0 })) is_demo_open = true;

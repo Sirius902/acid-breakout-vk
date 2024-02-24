@@ -1,3 +1,5 @@
+const std = @import("std");
+const math = std.math;
 const zlm = @import("zlm");
 
 const signed = zlm.SpecializeOn(i32);
@@ -71,4 +73,24 @@ pub fn vec2Cast(comptime Real: type, vec: anytype) zlm.SpecializeOn(Real).Vec2 {
 
 pub fn vec2Round(vec: anytype) @TypeOf(vec) {
     return @TypeOf(vec).new(@round(vec.x), @round(vec.y));
+}
+
+pub fn vec2Clamp(vec: anytype, min: @TypeOf(vec), max: @TypeOf(vec)) @TypeOf(vec) {
+    return @TypeOf(vec){
+        .x = math.clamp(vec.x, min.x, max.x),
+        .y = math.clamp(vec.y, min.y, max.y),
+    };
+}
+
+/// Returns the maximum number of digits for an integer type in base 10.
+pub fn maxDigits(Int: type) usize {
+    const max = std.fmt.comptimePrint("{}", .{math.maxInt(Int)});
+
+    return switch (@typeInfo(Int).Int.signedness) {
+        .signed => blk: {
+            const min = std.fmt.comptimePrint("{}", .{math.minInt(Int)});
+            break :blk @max(max.len, min.len);
+        },
+        .unsigned => max.len,
+    };
 }
