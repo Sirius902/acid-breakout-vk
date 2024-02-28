@@ -1169,8 +1169,8 @@ const Mask = struct {
             .image = self.image,
             .old_layout = .undefined,
             .new_layout = .transfer_dst_optimal,
-            .src_queue_family_index = undefined,
-            .dst_queue_family_index = undefined,
+            .src_queue_family_index = gc.graphics_queue.family,
+            .dst_queue_family_index = gc.graphics_queue.family,
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
                 .base_mip_level = 0,
@@ -1202,8 +1202,8 @@ const Mask = struct {
             .image = self.image,
             .old_layout = .transfer_dst_optimal,
             .new_layout = .shader_read_only_optimal,
-            .src_queue_family_index = undefined,
-            .dst_queue_family_index = undefined,
+            .src_queue_family_index = gc.graphics_queue.family,
+            .dst_queue_family_index = gc.graphics_queue.family,
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
                 .base_mip_level = 0,
