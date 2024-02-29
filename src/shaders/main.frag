@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 #define SHADING_COLOR 0
 #define SHADING_RAINBOW 1
