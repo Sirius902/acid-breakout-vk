@@ -1,20 +1,24 @@
 const std = @import("std");
+const vk = @import("vulkan");
 const zlm = @import("zlm");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const Vec2 = zlm.Vec2;
 const Vec3 = zlm.Vec3;
 const Vec4 = zlm.Vec4;
+const vec3 = zlm.vec3;
 const log = std.log.scoped(.draw);
 
 const Self = @This();
 
-allocator: Allocator,
 arena: ArenaAllocator,
-rects: std.ArrayList(Rect),
-points: std.ArrayList(Point),
-paths: std.ArrayList(Path),
-path_buf: std.ArrayList(Point),
+rects: std.ArrayList(Instance),
+masked_rects: std.ArrayList(Instance),
+rect_masks: std.ArrayList(Mask),
+point_verts: std.ArrayList(PointVertex),
+line_verts: std.ArrayList(PointVertex),
+line_indices: std.ArrayList(u32),
+current_path: std.ArrayList(PointVertex),
 is_path_started: bool = false,
 
 pub const Error = error{
@@ -22,10 +26,98 @@ pub const Error = error{
     PathAlreadyStarted,
 } || Allocator.Error;
 
-pub const ShadingMethod = enum {
-    color,
-    rainbow,
-    rainbow_scroll,
+pub const ShadingMethod = enum(u32) {
+    color = 0,
+    rainbow = 1,
+    rainbow_scroll = 2,
+};
+
+pub const Instance = struct {
+    model: zlm.Mat4,
+    color: Vec4,
+    shading: ShadingMethod,
+
+    pub const binding = 1;
+
+    pub const binding_description = vk.VertexInputBindingDescription{
+        .binding = binding,
+        .stride = @sizeOf(Instance),
+        .input_rate = .instance,
+    };
+
+    pub const attribute_description = [_]vk.VertexInputAttributeDescription{
+        .{
+            .binding = binding,
+            .location = 2,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 0 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 3,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 1 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 4,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 2 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 5,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "model") + 3 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .binding = binding,
+            .location = 6,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(Instance, "color"),
+        },
+        .{
+            .binding = binding,
+            .location = 7,
+            .format = .r32_uint,
+            .offset = @offsetOf(Instance, "shading"),
+        },
+    };
+};
+
+pub const PointVertex = struct {
+    pos: Vec2,
+    color: Vec4,
+    shading: ShadingMethod,
+
+    pub const binding = 0;
+
+    pub const binding_description = vk.VertexInputBindingDescription{
+        .binding = binding,
+        .stride = @sizeOf(PointVertex),
+        .input_rate = .vertex,
+    };
+
+    pub const attribute_description = [_]vk.VertexInputAttributeDescription{
+        .{
+            .binding = binding,
+            .location = 0,
+            .format = .r32g32_sfloat,
+            .offset = @offsetOf(PointVertex, "pos"),
+        },
+        .{
+            .binding = binding,
+            .location = 1,
+            .format = .r32g32b32a32_sfloat,
+            .offset = @offsetOf(PointVertex, "color"),
+        },
+        .{
+            .binding = binding,
+            .location = 2,
+            .format = .r32_uint,
+            .offset = @offsetOf(PointVertex, "shading"),
+        },
+    };
 };
 
 pub const Alpha = struct {
@@ -70,63 +162,111 @@ pub const Path = struct {
 
 pub fn init(allocator: Allocator) Self {
     return .{
-        .allocator = allocator,
         .arena = ArenaAllocator.init(allocator),
-        .rects = std.ArrayList(Rect).init(allocator),
-        .points = std.ArrayList(Point).init(allocator),
-        .paths = std.ArrayList(Path).init(allocator),
-        .path_buf = std.ArrayList(Point).init(allocator),
+        .rects = std.ArrayList(Instance).init(allocator),
+        .masked_rects = std.ArrayList(Instance).init(allocator),
+        .rect_masks = std.ArrayList(Mask).init(allocator),
+        .point_verts = std.ArrayList(PointVertex).init(allocator),
+        .line_verts = std.ArrayList(PointVertex).init(allocator),
+        .line_indices = std.ArrayList(u32).init(allocator),
+        .current_path = std.ArrayList(PointVertex).init(allocator),
     };
 }
 
 pub fn deinit(self: *Self) void {
     self.arena.deinit();
-    self.path_buf.deinit();
     self.rects.deinit();
-    self.points.deinit();
-    self.paths.deinit();
+    self.masked_rects.deinit();
+    self.rect_masks.deinit();
+    self.point_verts.deinit();
+    self.line_verts.deinit();
+    self.line_indices.deinit();
+    self.current_path.deinit();
 }
 
 pub fn clear(self: *Self) void {
     _ = self.arena.reset(.retain_capacity);
 
-    if (self.is_path_started) {
-        log.warn("Expected path to end", .{});
-
-        self.is_path_started = false;
-        self.path_buf.clearRetainingCapacity();
-    }
-
     self.rects.clearRetainingCapacity();
-    self.points.clearRetainingCapacity();
-    self.paths.clearRetainingCapacity();
+    self.masked_rects.clearRetainingCapacity();
+    self.rect_masks.clearRetainingCapacity();
+    self.point_verts.clearRetainingCapacity();
+    self.line_verts.clearRetainingCapacity();
+    self.line_indices.clearRetainingCapacity();
+    self.current_path.clearRetainingCapacity();
+
+    self.is_path_started = false;
 }
 
 pub fn addRect(self: *Self, rect: Rect) Error!void {
     std.debug.assert(rect.min.x <= rect.max.x and rect.min.y <= rect.max.y);
-    try self.rects.append(rect);
+
+    const size = rect.size();
+    const model = zlm.Mat4.createScale(size.x, size.y, 1)
+        .mul(zlm.Mat4.createTranslation(vec3(rect.min.x, rect.min.y, 0)));
+
+    var color: Vec4 = undefined;
+    switch (rect.shading) {
+        .color => |cl| color = cl,
+        inline else => |alpha| color.w = alpha.a,
+    }
+
+    const instance: Instance = .{
+        .model = model,
+        .color = color,
+        .shading = rect.shading,
+    };
+
+    if (rect.mask) |mask| {
+        try self.masked_rects.append(instance);
+        try self.rect_masks.append(mask);
+    } else {
+        try self.rects.append(instance);
+    }
 }
 
 pub fn addPoint(self: *Self, point: Point) Error!void {
+    var color: Vec4 = undefined;
+    switch (point.shading) {
+        .color => |cl| color = cl,
+        inline else => |alpha| color.w = alpha.a,
+    }
+
     if (self.is_path_started) {
-        try self.path_buf.append(point);
+        try self.current_path.append(.{
+            .pos = point.pos,
+            .color = color,
+            .shading = point.shading,
+        });
     } else {
-        try self.points.append(point);
+        try self.point_verts.append(.{
+            .pos = point.pos,
+            .color = color,
+            .shading = point.shading,
+        });
     }
 }
 
 pub fn beginPath(self: *Self) Error!void {
     if (self.is_path_started) return error.PathAlreadyStarted;
     self.is_path_started = true;
+    self.current_path.clearRetainingCapacity();
 }
 
 pub fn endPath(self: *Self) Error!void {
     if (!self.is_path_started) return error.PathNotStarted;
     self.is_path_started = false;
 
-    const points = try self.arena.allocator().dupe(Point, self.path_buf.items);
-    try self.paths.append(.{ .points = points });
-    self.path_buf.clearRetainingCapacity();
+    const path_start = self.line_verts.items.len;
+    try self.line_verts.appendSlice(self.current_path.items);
+
+    if (self.current_path.items.len == 1) {
+        try self.line_indices.appendSlice(&[_]u32{ @intCast(path_start), @intCast(path_start) });
+    } else {
+        for (0..self.current_path.items.len - 1) |i| {
+            try self.line_indices.appendSlice(&[_]u32{ @intCast(path_start + i), @intCast(path_start + i + 1) });
+        }
+    }
 }
 
 pub fn dupe(self: *Self, comptime T: type, m: []const T) Error![]T {

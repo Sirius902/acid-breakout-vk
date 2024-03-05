@@ -12,6 +12,8 @@ const AudioContext = @import("audio_context.zig").AudioContext;
 const InputContext = @import("InputContext.zig");
 const Game = @import("game/game.zig").Game;
 const DrawList = @import("game/game.zig").DrawList;
+const Instance = DrawList.Instance;
+const PointVertex = DrawList.PointVertex;
 const Allocator = std.mem.Allocator;
 const MemoryPoolExtra = std.heap.MemoryPoolExtra;
 const Vec2 = zlm.Vec2;
@@ -61,100 +63,6 @@ const rect_verts = [_]Vertex{
 };
 
 const rect_indices = [_]u16{ 0, 1, 2, 0, 3, 1 };
-
-const Shading = enum(u32) {
-    color = 0,
-    rainbow = 1,
-    rainbow_scroll = 2,
-};
-
-const Instance = struct {
-    model: zlm.Mat4,
-    color: Vec4,
-    shading: Shading,
-
-    const binding = 1;
-
-    const binding_description = vk.VertexInputBindingDescription{
-        .binding = binding,
-        .stride = @sizeOf(Instance),
-        .input_rate = .instance,
-    };
-
-    const attribute_description = [_]vk.VertexInputAttributeDescription{
-        .{
-            .binding = binding,
-            .location = 2,
-            .format = .r32g32b32a32_sfloat,
-            .offset = @offsetOf(Instance, "model") + 0 * @sizeOf(zlm.Vec4),
-        },
-        .{
-            .binding = binding,
-            .location = 3,
-            .format = .r32g32b32a32_sfloat,
-            .offset = @offsetOf(Instance, "model") + 1 * @sizeOf(zlm.Vec4),
-        },
-        .{
-            .binding = binding,
-            .location = 4,
-            .format = .r32g32b32a32_sfloat,
-            .offset = @offsetOf(Instance, "model") + 2 * @sizeOf(zlm.Vec4),
-        },
-        .{
-            .binding = binding,
-            .location = 5,
-            .format = .r32g32b32a32_sfloat,
-            .offset = @offsetOf(Instance, "model") + 3 * @sizeOf(zlm.Vec4),
-        },
-        .{
-            .binding = binding,
-            .location = 6,
-            .format = .r32g32b32a32_sfloat,
-            .offset = @offsetOf(Instance, "color"),
-        },
-        .{
-            .binding = binding,
-            .location = 7,
-            .format = .r32_uint,
-            .offset = @offsetOf(Instance, "shading"),
-        },
-    };
-};
-
-const PointVertex = struct {
-    pos: Vec2,
-    color: Vec4,
-    shading: Shading,
-
-    const binding = 0;
-
-    const binding_description = vk.VertexInputBindingDescription{
-        .binding = binding,
-        .stride = @sizeOf(PointVertex),
-        .input_rate = .vertex,
-    };
-
-    const attribute_description = [_]vk.VertexInputAttributeDescription{
-        .{
-            .binding = binding,
-            .location = 0,
-            .format = .r32g32_sfloat,
-            .offset = @offsetOf(PointVertex, "pos"),
-        },
-        .{
-            .binding = binding,
-            .location = 1,
-            .format = .r32g32b32a32_sfloat,
-            .offset = @offsetOf(PointVertex, "color"),
-        },
-        .{
-            .binding = binding,
-            .location = 2,
-            .format = .r32_uint,
-            .offset = @offsetOf(PointVertex, "shading"),
-        },
-    };
-};
 
 const PushConstants = extern struct {
     view: zlm.Mat4,
@@ -637,50 +545,47 @@ pub fn main() !void {
         draw_list.clear();
         try game.draw(&draw_list);
 
-        var draw_data = try executeDrawList(&draw_list, allocator);
-        defer draw_data.deinit();
-
         const current_image = try swapchain.acquireImage();
 
         const cmdbuf = cmdbufs[swapchain.image_index];
         const rect_instance_buffer = &rect_instance_buffers[swapchain.image_index];
-        const masked_rects_start = draw_data.rects.items.len;
-        const num_rects = masked_rects_start + draw_data.masked_rects.items.len;
-        if (draw_data.rects.items.len > 0) {
+        const masked_rects_start = draw_list.rects.items.len;
+        const num_rects = masked_rects_start + draw_list.masked_rects.items.len;
+        if (draw_list.rects.items.len > 0) {
             try rect_instance_buffer.ensureTotalCapacity(gc, num_rects);
             const gpu_instances = try rect_instance_buffer.map(gc);
             defer rect_instance_buffer.unmap(gc);
-            @memcpy(gpu_instances, draw_data.rects.items);
-            @memcpy(gpu_instances + masked_rects_start, draw_data.masked_rects.items);
+            @memcpy(gpu_instances, draw_list.rects.items);
+            @memcpy(gpu_instances + masked_rects_start, draw_list.masked_rects.items);
         }
         rect_instance_buffer.len = num_rects;
 
         const point_vertex_buffer = &point_vertex_buffers[swapchain.image_index];
-        if (draw_data.point_verts.items.len > 0) {
-            try point_vertex_buffer.ensureTotalCapacity(gc, draw_data.point_verts.items.len);
+        if (draw_list.point_verts.items.len > 0) {
+            try point_vertex_buffer.ensureTotalCapacity(gc, draw_list.point_verts.items.len);
             const gpu_points = try point_vertex_buffer.map(gc);
             defer point_vertex_buffer.unmap(gc);
-            @memcpy(gpu_points, draw_data.point_verts.items);
+            @memcpy(gpu_points, draw_list.point_verts.items);
         }
-        point_vertex_buffer.len = draw_data.point_verts.items.len;
+        point_vertex_buffer.len = draw_list.point_verts.items.len;
 
         const line_vertex_buffer = &line_vertex_buffers[swapchain.image_index];
-        if (draw_data.line_verts.items.len > 0) {
-            try line_vertex_buffer.ensureTotalCapacity(gc, draw_data.line_verts.items.len);
+        if (draw_list.line_verts.items.len > 0) {
+            try line_vertex_buffer.ensureTotalCapacity(gc, draw_list.line_verts.items.len);
             const gpu_lines = try line_vertex_buffer.map(gc);
             defer line_vertex_buffer.unmap(gc);
-            @memcpy(gpu_lines, draw_data.line_verts.items);
+            @memcpy(gpu_lines, draw_list.line_verts.items);
         }
-        line_vertex_buffer.len = draw_data.line_verts.items.len;
+        line_vertex_buffer.len = draw_list.line_verts.items.len;
 
         const line_index_buffer = &line_index_buffers[swapchain.image_index];
-        if (draw_data.line_indices.items.len > 0) {
-            try line_index_buffer.ensureTotalCapacity(gc, draw_data.line_indices.items.len);
+        if (draw_list.line_indices.items.len > 0) {
+            try line_index_buffer.ensureTotalCapacity(gc, draw_list.line_indices.items.len);
             const gpu_indices = try line_index_buffer.map(gc);
             defer line_index_buffer.unmap(gc);
-            @memcpy(gpu_indices, draw_data.line_indices.items);
+            @memcpy(gpu_indices, draw_list.line_indices.items);
         }
-        line_index_buffer.len = draw_data.line_indices.items.len;
+        line_index_buffer.len = draw_list.line_indices.items.len;
 
         {
             var node = masks.first;
@@ -702,7 +607,7 @@ pub fn main() !void {
         var rect_masks = std.ArrayList(*const MaskNode).init(allocator);
         defer rect_masks.deinit();
 
-        for (draw_data.rect_masks.items) |rect_mask| {
+        for (draw_list.rect_masks.items) |rect_mask| {
             var mask = Mask.init(gc, descriptor_set_layout, descriptor_pool, .{
                 .width = rect_mask.width,
                 .height = rect_mask.height,
@@ -927,127 +832,6 @@ fn Buffer(comptime T: type) type {
             }
         }
     };
-}
-
-// TODO: Arena for draw data?
-const DrawData = struct {
-    rects: std.ArrayList(Instance),
-    masked_rects: std.ArrayList(Instance),
-    rect_masks: std.ArrayList(DrawList.Mask),
-    point_verts: std.ArrayList(PointVertex),
-    line_verts: std.ArrayList(PointVertex),
-    line_indices: std.ArrayList(u32),
-
-    pub fn init(allocator: Allocator) DrawData {
-        return .{
-            .rects = std.ArrayList(Instance).init(allocator),
-            .masked_rects = std.ArrayList(Instance).init(allocator),
-            .rect_masks = std.ArrayList(DrawList.Mask).init(allocator),
-            .point_verts = std.ArrayList(PointVertex).init(allocator),
-            .line_verts = std.ArrayList(PointVertex).init(allocator),
-            .line_indices = std.ArrayList(u32).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *DrawData) void {
-        self.rects.deinit();
-        self.masked_rects.deinit();
-        self.rect_masks.deinit();
-        self.point_verts.deinit();
-        self.line_verts.deinit();
-        self.line_indices.deinit();
-    }
-};
-
-fn executeDrawList(draw_list: *const DrawList, allocator: Allocator) !DrawData {
-    var draw_data = DrawData.init(allocator);
-    errdefer draw_data.deinit();
-
-    for (draw_list.rects.items) |rect| {
-        const size = rect.size();
-        const model = zlm.Mat4.createScale(size.x, size.y, 1)
-            .mul(zlm.Mat4.createTranslation(vec3(rect.min.x, rect.min.y, 0)));
-
-        var color: Vec4 = undefined;
-        switch (rect.shading) {
-            .color => |cl| color = cl,
-            inline else => |alpha| color.w = alpha.a,
-        }
-
-        const shading: Shading = switch (rect.shading) {
-            .color => .color,
-            .rainbow => .rainbow,
-            .rainbow_scroll => .rainbow_scroll,
-        };
-
-        const instance: Instance = .{
-            .model = model,
-            .color = color,
-            .shading = shading,
-        };
-
-        if (rect.mask) |mask| {
-            try draw_data.masked_rects.append(instance);
-            try draw_data.rect_masks.append(mask);
-        } else {
-            try draw_data.rects.append(instance);
-        }
-    }
-
-    for (draw_list.points.items) |point| {
-        var color: Vec4 = undefined;
-        switch (point.shading) {
-            .color => |cl| color = cl,
-            inline else => |alpha| color.w = alpha.a,
-        }
-
-        const shading: Shading = switch (point.shading) {
-            .color => .color,
-            .rainbow => .rainbow,
-            .rainbow_scroll => .rainbow_scroll,
-        };
-
-        try draw_data.point_verts.append(.{
-            .pos = point.pos,
-            .color = color,
-            .shading = shading,
-        });
-    }
-
-    for (draw_list.paths.items) |path| {
-        if (path.points.len == 0) continue;
-
-        const path_start = draw_data.line_verts.items.len;
-        for (path.points) |point| {
-            var color: Vec4 = undefined;
-            switch (point.shading) {
-                .color => |cl| color = cl,
-                inline else => |alpha| color.w = alpha.a,
-            }
-
-            const shading: Shading = switch (point.shading) {
-                .color => .color,
-                .rainbow => .rainbow,
-                .rainbow_scroll => .rainbow_scroll,
-            };
-
-            try draw_data.line_verts.append(.{
-                .pos = point.pos,
-                .color = color,
-                .shading = shading,
-            });
-        }
-
-        if (path.points.len == 1) {
-            try draw_data.line_indices.appendSlice(&[_]u32{ @intCast(path_start), @intCast(path_start) });
-        } else {
-            for (0..path.points.len - 1) |i| {
-                try draw_data.line_indices.appendSlice(&[_]u32{ @intCast(path_start + i), @intCast(path_start + i + 1) });
-            }
-        }
-    }
-
-    return draw_data;
 }
 
 const Mask = struct {
@@ -1358,7 +1142,7 @@ fn recordCommandBuffer(
         .p_clear_values = @as([*]const vk.ClearValue, @ptrCast(&clear)),
     }, .@"inline");
 
-    if (line_vertex_buffer.handle != .null_handle) {
+    if (line_index_buffer.handle != .null_handle) {
         const line_offsets = [_]vk.DeviceSize{0};
 
         gc.vkd.cmdBindPipeline(cmdbuf, .graphics, pipelines.line);
