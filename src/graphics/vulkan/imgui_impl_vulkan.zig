@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("../../c.zig");
 const vk = @import("vulkan");
 
 pub const ImGui_ImplVulkanH_Frame = extern struct {

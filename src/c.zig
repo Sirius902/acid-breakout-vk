@@ -19,4 +19,4 @@ pub extern fn glfwGetPhysicalDevicePresentationSupport(instance: vk.Instance, pd
 pub extern fn glfwCreateWindowSurface(instance: vk.Instance, window: *c.GLFWwindow, allocation_callbacks: ?*const vk.AllocationCallbacks, surface: *vk.SurfaceKHR) vk.Result;
 
 // Same as above but for ImGui Vulkan impl.
-pub usingnamespace @import("imgui_impl_vulkan.zig");
+pub usingnamespace @import("graphics/vulkan/imgui_impl_vulkan.zig");

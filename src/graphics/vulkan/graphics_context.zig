@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const vk = @import("vulkan");
 const shaders = @import("shaders");
-const c = @import("c.zig");
+const c = @import("../../c.zig");
 const Allocator = std.mem.Allocator;
 
 const log = std.log.scoped(.gfx);

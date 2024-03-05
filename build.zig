@@ -26,9 +26,32 @@ pub fn build(b: *std.Build) void {
 
     linkGlfw(b, exe, target);
     linkOpenAl(b, exe, target);
-    linkVulkan(b, exe, target);
-    linkShaders(b, exe);
-    linkImGui(b, exe, target);
+
+    const graphics_str = b.option(
+        []const u8,
+        "graphics",
+        "Graphics backend to use. Options are \"vulkan\" (default) and \"wgpu\".",
+    ) orelse if (target.result.isWasm()) "wgpu" else "vulkan";
+
+    const graphics: GraphicsBackend = if (std.mem.eql(u8, graphics_str, "vulkan"))
+        .vulkan
+    else if (std.mem.eql(u8, graphics_str, "wgpu"))
+        .wgpu
+    else
+        std.debug.panic("Unsupported graphics backend: \"{s}\"", .{graphics_str});
+
+    // TODO: Output graphics backend info and name to module.
+
+    switch (graphics) {
+        .vulkan => {
+            linkVulkan(b, exe, target);
+            linkVulkanShaders(b, exe);
+        },
+        // TODO: Link wgpu.
+        .wgpu => {},
+    }
+
+    linkImGui(b, exe, target, graphics);
 
     b.installArtifact(exe);
 
@@ -54,6 +77,11 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 }
+
+const GraphicsBackend = enum {
+    vulkan,
+    wgpu,
+};
 
 fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
     // Try to link libs using vcpkg on Windows
@@ -155,24 +183,24 @@ fn linkVulkan(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build
     compile.root_module.addImport("vulkan", vkzig_bindings);
 }
 
-fn linkShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
+fn linkVulkanShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
     const shaders = vkgen.ShaderCompileStep.create(
         b,
         &[_][]const u8{ "glslc", "--target-env=vulkan1.2" },
         "-o",
     );
 
-    shaders.add("rect_vert", "src/shaders/rect.vert", .{});
-    shaders.add("point_vert", "src/shaders/point.vert", .{});
-    shaders.add("line_vert", "src/shaders/point.vert", .{ .args = &.{"-DIS_LINE"} });
-    shaders.add("main_frag", "src/shaders/main.frag", .{});
-    shaders.add("mask_frag", "src/shaders/main.frag", .{ .args = &.{"-DUSE_PIXEL_MASK"} });
-    shaders.add("imgui_vert", "src/shaders/imgui.vert", .{});
-    shaders.add("imgui_frag", "src/shaders/imgui.frag", .{});
+    shaders.add("rect_vert", "src/graphics/vulkan/shaders/rect.vert", .{});
+    shaders.add("point_vert", "src/graphics/vulkan/shaders/point.vert", .{});
+    shaders.add("line_vert", "src/graphics/vulkan/shaders/point.vert", .{ .args = &.{"-DIS_LINE"} });
+    shaders.add("main_frag", "src/graphics/vulkan/shaders/main.frag", .{});
+    shaders.add("mask_frag", "src/graphics/vulkan/shaders/main.frag", .{ .args = &.{"-DUSE_PIXEL_MASK"} });
+    shaders.add("imgui_vert", "src/graphics/vulkan/shaders/imgui.vert", .{});
+    shaders.add("imgui_frag", "src/graphics/vulkan/shaders/imgui.frag", .{});
     compile.root_module.addImport("shaders", shaders.getModule());
 }
 
-fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
+fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, graphics: GraphicsBackend) void {
     const cimgui_dir = "external/cimgui";
     const cimgui_src = &[_][]const u8{
         "cimgui.cpp",
@@ -182,7 +210,11 @@ fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.
         "imgui/imgui_tables.cpp",
         "imgui/imgui_widgets.cpp",
         "imgui/backends/imgui_impl_glfw.cpp",
-        "imgui/backends/imgui_impl_vulkan.cpp",
+        // TODO: Only link appropriate graphics backend.
+        switch (graphics) {
+            .vulkan => "imgui/backends/imgui_impl_vulkan.cpp",
+            .wgpu => "imgui/backends/imgui_impl_wgpu.cpp",
+        },
     };
     const cxx_flags = &[_][]const u8{
         "-std=c++20",

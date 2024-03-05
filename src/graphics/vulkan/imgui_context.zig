@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("../../c.zig");
 const vk = @import("vulkan");
 const shaders = @import("shaders");
 const GraphicsContext = @import("graphics_context.zig").GraphicsContext;
@@ -26,27 +26,7 @@ pub const ImGuiContext = struct {
         allocator: Allocator,
         render_pass: vk.RenderPass,
         window: *c.GLFWwindow,
-        ini_path: [*:0]const u8,
     ) !ImGuiContext {
-        _ = c.igCreateContext(null);
-        errdefer c.igDestroyContext(null);
-
-        const io: *c.ImGuiIO = c.igGetIO();
-        io.IniFilename = ini_path;
-        io.ConfigFlags |= c.ImGuiConfigFlags_NavEnableKeyboard;
-        io.ConfigFlags |= c.ImGuiConfigFlags_NavEnableGamepad;
-        io.ConfigFlags |= c.ImGuiConfigFlags_DockingEnable;
-        // io.ConfigFlags |= c.ImGuiConfigFlags_ViewportsEnable;
-
-        // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
-        const style: *c.ImGuiStyle = c.igGetStyle();
-        if ((io.ConfigFlags & c.ImGuiConfigFlags_ViewportsEnable) != 0) {
-            style.WindowRounding = 0.0;
-            style.Colors[c.ImGuiCol_WindowBg].w = 1.0;
-        }
-
-        c.igStyleColorsDark(null);
-
         if (!c.ImGui_ImplGlfw_InitForVulkan(window, true)) return error.ImGuiGlfwInit;
         errdefer c.ImGui_ImplGlfw_Shutdown();
 
@@ -179,20 +159,6 @@ pub const ImGuiContext = struct {
 
         c.ImGui_ImplVulkan_Shutdown();
         self.gc.vkd.destroyDescriptorPool(self.gc.dev, self.descriptor_pool, null);
-        c.ImGui_ImplGlfw_Shutdown();
-        c.igDestroyContext(null);
-    }
-
-    pub fn newFrame(self: *const ImGuiContext) void {
-        _ = self;
-        c.ImGui_ImplVulkan_NewFrame();
-        c.ImGui_ImplGlfw_NewFrame();
-        c.igNewFrame();
-    }
-
-    pub fn render(self: *const ImGuiContext) void {
-        _ = self;
-        c.igRender();
     }
 
     pub fn renderDrawDataToTexture(self: *const ImGuiContext, cmdbuf: vk.CommandBuffer) !void {
