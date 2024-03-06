@@ -6,82 +6,107 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{
+    const options = .{
         .name = "acid-breakout",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
-    });
+    };
 
-    const zlm = b.dependency("zlm", .{});
-    exe.root_module.addImport("zlm", zlm.module("zlm"));
-
-    var assets = AssetStep.create(b);
-    assets.addAsset(.{ .name = "ball_reflect", .path = "assets/sound/ball-reflect.wav", .tag = .wav });
-    assets.addAsset(.{ .name = "ball_free", .path = "assets/sound/ball-free.wav", .tag = .wav });
-    exe.root_module.addImport("assets", assets.getModule());
-
-    exe.linkLibC();
-    exe.linkLibCpp();
-
-    linkGlfw(b, exe, target);
-    linkOpenAl(b, exe, target);
-
-    const graphics_str = b.option(
-        []const u8,
+    const graphics: GraphicsBackend = b.option(
+        GraphicsBackend,
         "graphics",
-        "Graphics backend to use. Options are \"vulkan\" (default) and \"wgpu\".",
-    ) orelse if (target.result.isWasm()) "wgpu" else "vulkan";
-
-    const graphics: GraphicsBackend = if (std.mem.eql(u8, graphics_str, "vulkan"))
-        .vulkan
-    else if (std.mem.eql(u8, graphics_str, "wgpu"))
+        "Graphics backend to use. Default is Vulkan for Desktop and WebGPU for Web",
+    ) orelse if (target.result.os.tag == .emscripten)
         .wgpu
     else
-        std.debug.panic("Unsupported graphics backend: \"{s}\"", .{graphics_str});
+        .vulkan;
 
-    // TODO: Output graphics backend info and name to module.
+    if (target.result.os.tag == .emscripten) {
+        const lib = b.addStaticLibrary(options);
+        b.installArtifact(lib);
 
-    switch (graphics) {
-        .vulkan => {
-            linkVulkan(b, exe, target);
-            linkVulkanShaders(b, exe);
-        },
-        // TODO: Link wgpu.
-        .wgpu => {},
+        linkLibraries(b, lib, target, graphics);
+
+        // TODO: Compile with emscripten.
+    } else {
+        const exe = b.addExecutable(options);
+        b.installArtifact(exe);
+
+        linkLibraries(b, exe, target, graphics);
+
+        const run_cmd = b.addRunArtifact(exe);
+
+        run_cmd.step.dependOn(b.getInstallStep());
+
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+
+        const run_step = b.step("run", "Run the app");
+        run_step.dependOn(&run_cmd.step);
+
+        const exe_unit_tests = b.addTest(.{
+            .root_source_file = options.root_source_file,
+            .target = target,
+            .optimize = optimize,
+        });
+
+        const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+
+        const test_step = b.step("test", "Run unit tests");
+        test_step.dependOn(&run_exe_unit_tests.step);
     }
-
-    linkImGui(b, exe, target, graphics);
-
-    b.installArtifact(exe);
-
-    const run_cmd = b.addRunArtifact(exe);
-
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
-    const exe_unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
 }
 
 const GraphicsBackend = enum {
     vulkan,
     wgpu,
 };
+
+fn linkLibraries(
+    b: *std.Build,
+    compile: *std.Build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    graphics: GraphicsBackend,
+) void {
+    const zlm = b.dependency("zlm", .{});
+    compile.root_module.addImport("zlm", zlm.module("zlm"));
+
+    var assets = AssetStep.create(b);
+    assets.addAsset(.{ .name = "ball_reflect", .path = "assets/sound/ball-reflect.wav", .tag = .wav });
+    assets.addAsset(.{ .name = "ball_free", .path = "assets/sound/ball-free.wav", .tag = .wav });
+    compile.root_module.addImport("assets", assets.getModule());
+
+    compile.linkLibC();
+    compile.linkLibCpp();
+
+    if (target.result.os.tag == .emscripten) {
+        // TODO: Add include path from emscripten sdk include path.
+    } else {
+        linkGlfw(b, compile, target);
+        linkOpenAl(b, compile, target);
+    }
+
+    addOptions(b, compile, graphics);
+
+    switch (graphics) {
+        .vulkan => {
+            linkVulkan(b, compile, target);
+            linkVulkanShaders(b, compile);
+        },
+        // TODO: Support linking WebGPU on Desktop with Dawn.
+        .wgpu => {},
+    }
+
+    linkImGui(b, compile, target, graphics);
+}
+
+fn addOptions(b: *std.Build, compile: *std.Build.Step.Compile, graphics: GraphicsBackend) void {
+    const options = b.addOptions();
+    options.addOption(GraphicsBackend, "graphics_backend", graphics);
+    compile.root_module.addOptions("options", options);
+}
 
 fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
     // Try to link libs using vcpkg on Windows
@@ -210,7 +235,6 @@ fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.
         "imgui/imgui_tables.cpp",
         "imgui/imgui_widgets.cpp",
         "imgui/backends/imgui_impl_glfw.cpp",
-        // TODO: Only link appropriate graphics backend.
         switch (graphics) {
             .vulkan => "imgui/backends/imgui_impl_vulkan.cpp",
             .wgpu => "imgui/backends/imgui_impl_wgpu.cpp",
@@ -231,26 +255,29 @@ fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.
     compile.addIncludePath(.{ .path = cimgui_dir });
     compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "generator", "output" }) });
     compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "imgui" }) });
+    compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "imgui", "backends" }) });
 
     // Link system Vulkan lib for the ImGui Vulkan impl to use.
-    if (target.result.os.tag == .windows) {
-        const vulkan_sdk_root = std.process.getEnvVarOwned(b.allocator, "VULKAN_SDK") catch |err| {
-            std.debug.panic("Expected VULKAN_SDK env to be found, but got: {}", .{err});
-        };
+    if (graphics == .vulkan) {
+        if (target.result.os.tag == .windows) {
+            const vulkan_sdk_root = std.process.getEnvVarOwned(b.allocator, "VULKAN_SDK") catch |err| {
+                std.debug.panic("Expected VULKAN_SDK env to be found, but got: {}", .{err});
+            };
 
-        const arch_suffix = switch (target.result.cpu.arch) {
-            .x86 => "32",
-            .x86_64 => "",
-            else => std.debug.panic("Expected x86 CPU architecture, but got: {}", .{target.result.cpu.arch}),
-        };
+            const arch_suffix = switch (target.result.cpu.arch) {
+                .x86 => "32",
+                .x86_64 => "",
+                else => std.debug.panic("Expected x86 CPU architecture, but got: {}", .{target.result.cpu.arch}),
+            };
 
-        const lib_dir_name = std.mem.concat(b.allocator, u8, &[_][]const u8{ "Lib", arch_suffix }) catch @panic("OOM");
+            const lib_dir_name = std.mem.concat(b.allocator, u8, &[_][]const u8{ "Lib", arch_suffix }) catch @panic("OOM");
 
-        compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, "Include" }) });
-        compile.addLibraryPath(.{ .path = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, lib_dir_name }) });
-        compile.linkSystemLibrary("vulkan-1");
-    } else {
-        compile.linkSystemLibrary("vulkan");
+            compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, "Include" }) });
+            compile.addLibraryPath(.{ .path = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, lib_dir_name }) });
+            compile.linkSystemLibrary("vulkan-1");
+        } else {
+            compile.linkSystemLibrary("vulkan");
+        }
     }
 }
 

@@ -1,3 +1,8 @@
+const c = @This();
+
+const options = @import("options");
+const vk = @import("vulkan");
+
 pub usingnamespace @cImport({
     @cDefine("GLFW_INCLUDE_NONE", {});
     @cInclude("GLFW/glfw3.h");
@@ -8,9 +13,6 @@ pub usingnamespace @cImport({
     @cInclude("AL/al.h");
     @cInclude("AL/alc.h");
 });
-
-const vk = @import("vulkan");
-const c = @This();
 
 // Usually the GLFW vulkan functions are exported if Vulkan is included,
 // but since thats not the case here, they are manually imported.

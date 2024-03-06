@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const options = @import("options");
 const c = @import("c.zig");
 const zlm = @import("zlm");
 const assets = @import("assets");
@@ -12,7 +13,10 @@ const Allocator = std.mem.Allocator;
 const vec2 = zlm.vec2;
 const vec2u = math.vec2u;
 
-const GraphicsBackend = @import("graphics/vulkan/Backend.zig");
+const GraphicsBackend = switch (options.graphics_backend) {
+    .vulkan => @import("graphics/vulkan/Backend.zig"),
+    .wgpu => @import("graphics/wgpu/Backend.zig"),
+};
 
 const app_name = "Acid Breakout";
 
@@ -314,6 +318,17 @@ fn igFrame(
                 defer allocator.free(status_text);
 
                 c.igTextUnformatted(status_text.ptr, @as([*]u8, status_text.ptr) + status_text.len);
+            }
+
+            {
+                const backend = switch (options.graphics_backend) {
+                    .vulkan => "Vulkan",
+                    .wgpu => "WebGPU",
+                };
+                const backend_text = try std.fmt.allocPrint(allocator, "Graphics Backend: {s}", .{backend});
+                defer allocator.free(backend_text);
+
+                c.igTextUnformatted(backend_text.ptr, @as([*]u8, backend_text.ptr) + backend_text.len);
             }
 
             {
