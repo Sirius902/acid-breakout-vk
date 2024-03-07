@@ -20,6 +20,13 @@ pub fn init(
     wait_for_vsync: bool,
 ) !Self {
     _ = app_name;
+
+    var desc = c.WGPUInstanceDescriptor{};
+    desc.nextInChain = null;
+
+    const instance = c.wgpuCreateInstance(&desc);
+    _ = instance;
+
     return .{
         .allocator = allocator,
         .window = window,
@@ -38,5 +45,6 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
 }
 
 pub fn igImplNewFrame() void {
-    c.ImGui_ImplWGPU_NewFrame();
+    // TODO: Uncomment.
+    // c.ImGui_ImplWGPU_NewFrame();
 }

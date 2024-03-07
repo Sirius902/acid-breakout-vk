@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @import("c.zig");
 const Sound = @import("assets").Sound;
 const Allocator = std.mem.Allocator;
@@ -108,14 +109,19 @@ pub const AudioContext = struct {
             self.sound_queue_free.append(node);
         }
 
-        self.thread = try std.Thread.spawn(.{}, audioThread, .{self});
+        if (builtin.os.tag != .emscripten) {
+            self.thread = try std.Thread.spawn(.{}, audioThread, .{self});
+        }
+
         return self;
     }
 
     pub fn deinit(self: *AudioContext) void {
-        if (self.thread) |t| {
-            self.stop_flag.store(true, .Release);
-            t.join();
+        if (builtin.os.tag != .emscripten) {
+            if (self.thread) |t| {
+                self.stop_flag.store(true, .Release);
+                t.join();
+            }
         }
 
         c.alSourceStopv(@intCast(self.source_buf.len), &self.source_buf);
@@ -206,7 +212,27 @@ pub const AudioContext = struct {
     }
 
     pub fn averageTps(self: *const AudioContext) f64 {
-        return 1.0 / self.avg_ticktime_s.load(.Acquire);
+        // TODO: Do something better for emscripten.
+        return if (builtin.os.tag == .emscripten)
+            0.0
+        else
+            1.0 / self.avg_ticktime_s.load(.Acquire);
+    }
+
+    /// On multi-threaded platforms this will be called automatically in a dedicated audio thread. Otherwise, it must be called manually.
+    pub fn tickAudio(self: *AudioContext) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        // Try to spare the player's hearing.
+        const expected_source_count = @min(@max(1, self.sources.len) - 1, max_sources);
+        const gain_factor = 1.0 - @min(1.0 - 0.015, @log2(@as(f32, @floatFromInt(expected_source_count)) / 16 + 1.0));
+
+        c.alListenerf(c.AL_GAIN, self.getListenerGain() * gain_factor);
+        try checkAlError();
+
+        self.removeFinishedSources();
+        try self.startQueuedSounds();
     }
 
     fn audioThread(self: *AudioContext) void {
@@ -224,21 +250,6 @@ pub const AudioContext = struct {
             const ticktime_s = @as(f64, @floatFromInt(tick_timer.read())) / std.time.ns_per_s;
             self.avg_ticktime_s.store(alpha * ticktime_s + (1 - alpha) * self.avg_ticktime_s.load(.Unordered), .Release);
         }
-    }
-
-    fn tickAudio(self: *AudioContext) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
-
-        // Try to spare the player's hearing.
-        const expected_source_count = @min(@max(1, self.sources.len) - 1, max_sources);
-        const gain_factor = 1.0 - @min(1.0 - 0.015, @log2(@as(f32, @floatFromInt(expected_source_count)) / 16 + 1.0));
-
-        c.alListenerf(c.AL_GAIN, self.getListenerGain() * gain_factor);
-        try checkAlError();
-
-        self.removeFinishedSources();
-        try self.startQueuedSounds();
     }
 
     fn removeFinishedSources(self: *AudioContext) void {

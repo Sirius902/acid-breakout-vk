@@ -25,16 +25,24 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const exe_dir_path = std.fs.selfExeDirPathAlloc(allocator) catch |err| blk: {
-        std.log.err("Failed to get exe dir path: {}", .{err});
-        break :blk null;
-    };
+    const exe_dir_path = if (builtin.os.tag == .emscripten)
+        null
+    else
+        std.fs.selfExeDirPathAlloc(allocator) catch |err| blk: {
+            std.log.err("Failed to get exe dir path: {}", .{err});
+            break :blk null;
+        };
     defer if (exe_dir_path) |path| allocator.free(path);
 
-    var exe_dir = if (exe_dir_path) |path| std.fs.openDirAbsolute(path, .{}) catch |err| blk: {
-        std.log.err("Failed to open exe dir: {}", .{err});
-        break :blk null;
-    } else null;
+    var exe_dir: ?std.fs.Dir = if (builtin.os.tag == .emscripten)
+        std.fs.cwd()
+    else if (exe_dir_path) |path|
+        std.fs.openDirAbsolute(path, .{}) catch |err| blk: {
+            std.log.err("Failed to open exe dir: {}", .{err});
+            break :blk null;
+        }
+    else
+        null;
     defer if (exe_dir) |*dir| dir.close();
 
     var config: Config = if (exe_dir) |*dir|
@@ -145,6 +153,12 @@ pub fn main() !void {
         try game.draw(&draw_list);
 
         try gfx.renderFrame(&game, &draw_list);
+
+        // Tick audio synchronously on emscripten as there is no threading.
+        if (builtin.os.tag == .emscripten) {
+            try ac.tickAudio();
+        }
+
         c.glfwPollEvents();
     }
 }
@@ -212,22 +226,15 @@ fn glfwCursorPosCallback(window: ?*c.GLFWwindow, x: f64, y: f64) callconv(.C) vo
     input.updateMouse(vec2(@floatCast(x), @floatCast(y)));
 }
 
-var glfw_scancode_cache: std.EnumMap(InputContext.Key, c_int) = .{};
 fn glfwKeyCallback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
-    _ = key;
+    _ = scancode;
     _ = mods;
 
-    const input_key: ?InputContext.Key = for (std.enums.values(InputContext.Key)) |k| {
-        if (!glfw_scancode_cache.contains(k)) {
-            const glfw_key = switch (k) {
-                .escape => c.GLFW_KEY_ESCAPE,
-                .f1 => c.GLFW_KEY_F1,
-            };
-            glfw_scancode_cache.put(k, c.glfwGetKeyScancode(glfw_key));
-        }
-
-        if (glfw_scancode_cache.getAssertContains(k) == scancode) break k;
-    } else null;
+    const input_key: ?InputContext.Key = switch (key) {
+        c.GLFW_KEY_F1 => .f1,
+        c.GLFW_KEY_ESCAPE => .escape,
+        else => null,
+    };
 
     if (input_key) |k| {
         const input_state: InputContext.KeyState = switch (action) {

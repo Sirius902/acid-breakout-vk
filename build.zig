@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const vkgen = @import("vulkan_zig");
 const AssetStep = @import("asset-gen/AssetStep.zig");
 
@@ -23,12 +24,43 @@ pub fn build(b: *std.Build) void {
         .vulkan;
 
     if (target.result.os.tag == .emscripten) {
-        const lib = b.addStaticLibrary(options);
-        b.installArtifact(lib);
+        const emsdk_root = std.process.getEnvVarOwned(b.allocator, "EMSDK_ROOT") catch |err|
+            std.debug.panic("Expected EMSDK_ROOT env to be found: {}", .{err});
+        const emscripten_root = b.pathJoin(&[_][]const u8{ emsdk_root, "upstream", "emscripten" });
 
-        linkLibraries(b, lib, target, graphics);
+        const exe_lib = b.addStaticLibrary(options);
+        b.installArtifact(exe_lib);
 
-        // TODO: Compile with emscripten.
+        exe_lib.addSystemIncludePath(.{ .path = b.pathJoin(&[_][]const u8{
+            emscripten_root,
+            "cache",
+            "sysroot",
+            "include",
+        }) });
+
+        linkLibraries(b, exe_lib, target, graphics);
+
+        const emcc_path = b.pathJoin(&[_][]const u8{ emscripten_root, "emcc" ++ if (builtin.os.tag == .windows) ".bat" else "" });
+
+        // TODO: Remove verbose?
+        const emcc_command = b.addSystemCommand(&[_][]const u8{ emcc_path, "-v" });
+        emcc_command.addFileArg(exe_lib.getEmittedBin());
+        emcc_command.step.dependOn(&exe_lib.step);
+
+        emcc_command.addArgs(&[_][]const u8{
+            "-o",
+            // TODO: Use proper build output path.
+            "zig-out/acid-breakout.html",
+            "-sUSE_GLFW=3",
+            "-sUSE_WEBGPU",
+            "-sUSE_OFFSET_CONVERTER=1",
+            "-sALLOW_MEMORY_GROWTH=1",
+            "-sASYNCIFY",
+            "-O3",
+            "--emrun",
+        });
+
+        b.default_step.dependOn(&emcc_command.step);
     } else {
         const exe = b.addExecutable(options);
         b.installArtifact(exe);
@@ -81,9 +113,7 @@ fn linkLibraries(
     compile.linkLibC();
     compile.linkLibCpp();
 
-    if (target.result.os.tag == .emscripten) {
-        // TODO: Add include path from emscripten sdk include path.
-    } else {
+    if (target.result.os.tag != .emscripten) {
         linkGlfw(b, compile, target);
         linkOpenAl(b, compile, target);
     }
@@ -95,8 +125,18 @@ fn linkLibraries(
             linkVulkan(b, compile, target);
             linkVulkanShaders(b, compile);
         },
-        // TODO: Support linking WebGPU on Desktop with Dawn.
-        .wgpu => {},
+        // TODO: Properly support linking WebGPU on Desktop with Dawn.
+        .wgpu => if (target.result.os.tag != .emscripten) {
+            compile.addIncludePath(.{ .path = "external/dawn/include" });
+            compile.addLibraryPath(.{ .path = "external/dawn/lib" });
+            compile.addCSourceFiles(.{
+                .root = .{ .path = "external/dawn/src" },
+                .files = &[_][]const u8{"dawn_proc.c"},
+                .flags = &[_][]const u8{},
+            });
+            // TODO: Add libraries for other targets than just Windows. Use https://github.com/hexops/mach-gpu-dawn/releases.
+            compile.linkSystemLibrary("dawn");
+        },
     }
 
     linkImGui(b, compile, target, graphics);
@@ -255,7 +295,6 @@ fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.
     compile.addIncludePath(.{ .path = cimgui_dir });
     compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "generator", "output" }) });
     compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "imgui" }) });
-    compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "imgui", "backends" }) });
 
     // Link system Vulkan lib for the ImGui Vulkan impl to use.
     if (graphics == .vulkan) {
