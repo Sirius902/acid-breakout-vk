@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) void {
             "-sUSE_OFFSET_CONVERTER=1",
             "-sALLOW_MEMORY_GROWTH=1",
             "-sASYNCIFY",
+            "-sASSERTIONS",
             "-O3",
             "--emrun",
         });

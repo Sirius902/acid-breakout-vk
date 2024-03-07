@@ -112,6 +112,12 @@ pub fn main() !void {
 
     var frame_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
     while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
+        if (builtin.target.os.tag == .emscripten) {
+            // TODO: Use emscripten_request_animation_frame_loop.
+            const em = @cImport(@cInclude("emscripten.h"));
+            em.emscripten_sleep(16);
+        }
+
         var ww: c_int = undefined;
         var wh: c_int = undefined;
         c.glfwGetWindowSize(window, &ww, &wh);
