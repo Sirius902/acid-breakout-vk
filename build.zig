@@ -260,8 +260,6 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
     compile.addCSourceFile(.{ .file = .{ .path = "external/glfw3webgpu/glfw3webgpu.c" }, .flags = &[_][]const u8{} });
 
     if (target.result.os.tag != .emscripten) {
-        compile.addIncludePath(.{ .path = "external/wgpu/include" });
-
         const wgpu_target = std.mem.concat(b.allocator, u8, &[_][]const u8{ switch (target.result.os.tag) {
             .windows => "windows",
             .macos => "macos",
@@ -277,9 +275,11 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         const wgpu_bin_path = b.pathJoin(&[_][]const u8{ "external/wgpu/bin", wgpu_target });
         const wgpu_name = "wgpu_native";
 
+        compile.addIncludePath(.{ .path = "external/wgpu/include" });
+        compile.addLibraryPath(.{ .path = wgpu_bin_path });
+
         switch (target.result.os.tag) {
             .windows => {
-                compile.addLibraryPath(.{ .path = wgpu_bin_path });
                 compile.linkSystemLibrary(wgpu_name ++ ".dll");
 
                 const install_lib = installSharedLibWindows(b, wgpu_bin_path, wgpu_name);
