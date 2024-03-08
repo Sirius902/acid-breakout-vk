@@ -12,12 +12,12 @@ pub usingnamespace @cImport({
     @cInclude("cimgui_impl.h");
     @cInclude("AL/al.h");
     @cInclude("AL/alc.h");
-});
 
-pub usingnamespace if (options.graphics_backend == .wgpu)
-    @cImport(@cInclude("webgpu/webgpu.h"))
-else
-    struct {};
+    if (options.graphics_backend == .wgpu) {
+        @cInclude("webgpu/webgpu.h");
+        @cInclude("glfw3webgpu.h");
+    }
+});
 
 // Usually the GLFW vulkan functions are exported if Vulkan is included,
 // but since thats not the case here, they are manually imported.

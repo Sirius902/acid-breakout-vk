@@ -126,18 +126,7 @@ fn linkLibraries(
             linkVulkan(b, compile, target);
             linkVulkanShaders(b, compile);
         },
-        // TODO: Properly support linking WebGPU on Desktop with Dawn.
-        .wgpu => if (target.result.os.tag != .emscripten) {
-            compile.addIncludePath(.{ .path = "external/dawn/include" });
-            compile.addLibraryPath(.{ .path = "external/dawn/lib" });
-            compile.addCSourceFiles(.{
-                .root = .{ .path = "external/dawn/src" },
-                .files = &[_][]const u8{"dawn_proc.c"},
-                .flags = &[_][]const u8{},
-            });
-            // TODO: Add libraries for other targets than just Windows. Use https://github.com/hexops/mach-gpu-dawn/releases.
-            compile.linkSystemLibrary("dawn");
-        },
+        .wgpu => linkWgpu(b, compile, target),
     }
 
     linkImGui(b, compile, target, graphics);
@@ -264,6 +253,45 @@ fn linkVulkanShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
     shaders.add("imgui_vert", "src/graphics/vulkan/shaders/imgui.vert", .{});
     shaders.add("imgui_frag", "src/graphics/vulkan/shaders/imgui.frag", .{});
     compile.root_module.addImport("shaders", shaders.getModule());
+}
+
+fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
+    compile.addIncludePath(.{ .path = "external/glfw3webgpu" });
+    compile.addCSourceFile(.{ .file = .{ .path = "external/glfw3webgpu/glfw3webgpu.c" }, .flags = &[_][]const u8{} });
+
+    if (target.result.os.tag != .emscripten) {
+        compile.addIncludePath(.{ .path = "external/wgpu/include" });
+
+        const wgpu_target = std.mem.concat(b.allocator, u8, &[_][]const u8{ switch (target.result.os.tag) {
+            .windows => "windows",
+            .macos => "macos",
+            .linux => "linux",
+            else => |tag| std.debug.panic("Unsupported os: {}", .{tag}),
+        }, "-", switch (target.result.cpu.arch) {
+            .arm, .aarch64, .aarch64_be, .aarch64_32 => "arm64",
+            .x86 => "i686",
+            .x86_64 => "x86_64",
+            else => |arch| std.debug.panic("Unsupported cpu arch: {}", .{arch}),
+        } }) catch @panic("OOM");
+
+        const wgpu_bin_path = b.pathJoin(&[_][]const u8{ "external/wgpu/bin", wgpu_target });
+        const wgpu_name = "wgpu_native";
+
+        switch (target.result.os.tag) {
+            .windows => {
+                compile.addLibraryPath(.{ .path = wgpu_bin_path });
+                compile.linkSystemLibrary(wgpu_name ++ ".dll");
+
+                const install_lib = installSharedLibWindows(b, wgpu_bin_path, wgpu_name);
+                compile.step.dependOn(&install_lib.step);
+            },
+            .macos => @panic("macos not supported"),
+            .linux => {
+                compile.linkSystemLibrary(wgpu_name);
+            },
+            else => unreachable,
+        }
+    }
 }
 
 fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, graphics: GraphicsBackend) void {
