@@ -256,8 +256,20 @@ fn linkVulkanShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
 }
 
 fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
+    // TODO: Add way to specify which desktop environment to use.
+    const flags: []const []const u8 = if (target.result.os.tag == .linux) blk: {
+        const session_type = std.process.getEnvVarOwned(b.allocator, "XDG_SESSION_TYPE") catch |err| {
+            std.debug.panic("Expected XDG_SESSION_TYPE env to be found, but got: {}", .{err});
+        };
+
+        break :blk if (std.mem.eql(u8, session_type, "wayland"))
+            &.{"-D_GLFW_WAYLAND"}
+        else
+            &.{};
+    } else &.{};
+
     compile.addIncludePath(.{ .path = "external/glfw3webgpu" });
-    compile.addCSourceFile(.{ .file = .{ .path = "external/glfw3webgpu/glfw3webgpu.c" }, .flags = &[_][]const u8{} });
+    compile.addCSourceFile(.{ .file = .{ .path = "external/glfw3webgpu/glfw3webgpu.c" }, .flags = flags });
 
     if (target.result.os.tag != .emscripten) {
         const wgpu_target = std.mem.concat(b.allocator, u8, &[_][]const u8{ switch (target.result.os.tag) {
