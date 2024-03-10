@@ -14,14 +14,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     };
 
-    const graphics: GraphicsBackend = b.option(
-        GraphicsBackend,
-        "graphics",
-        "Graphics backend to use. Default is Vulkan for Desktop and WebGPU for Web",
-    ) orelse if (target.result.os.tag == .emscripten)
-        .wgpu
-    else
-        .vulkan;
+    const graphics = b.option(GraphicsBackend, "graphics", "Graphics backend to use. Default is WebGPU") orelse .wgpu;
 
     if (target.result.os.tag == .emscripten) {
         const emsdk_root = std.process.getEnvVarOwned(b.allocator, "EMSDK_ROOT") catch |err|

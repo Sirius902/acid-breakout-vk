@@ -17,11 +17,12 @@ device: c.WGPUDevice,
 error_logger: *ErrorLogger,
 queue: c.WGPUQueue,
 swapchain_format: c.WGPUTextureFormat,
-surface_extent: Extent2D,
+swapchain_extent: Extent2D,
 swapchain: c.WGPUSwapChain,
 pipelines: Pipelines,
 buffers: Buffers,
 uniform_bind_group: c.WGPUBindGroup,
+srgb_to_lrgb_pass: ?SrgbToLrgbPass,
 window: *c.GLFWwindow,
 wait_for_vsync: bool,
 is_graphics_outdated: bool = false,
@@ -30,6 +31,7 @@ const Self = @This();
 
 const log = std.log.scoped(.gfx);
 const shader_source = @embedFile("shaders/shader.wgsl");
+const srgb_to_lrgb_shader_source = @embedFile("shaders/srgb_to_lrgb.wgsl");
 const rect_verts = @import("../graphics.zig").rect_verts;
 const rect_indices = @import("../graphics.zig").rect_indices;
 
@@ -48,6 +50,7 @@ const UniformBufferObject = extern struct {
     aspect: zlm.Vec2 align(8),
     viewport_size: zlm.Vec2 align(8),
     time: f32,
+    color_correction: u32,
 };
 
 pub fn init(
@@ -86,8 +89,8 @@ pub fn init(
 
     const swapchain_format = c.wgpuSurfaceGetPreferredFormat(surface, adapter);
 
-    const surface_extent = getSurfaceExtent(window);
-    const swapchain = recreateSwapchain(device, surface, surface_extent, swapchain_format, wait_for_vsync);
+    const swapchain_extent = getSurfaceExtent(window);
+    const swapchain = recreateSwapchain(device, surface, swapchain_extent, swapchain_format, wait_for_vsync);
     errdefer c.wgpuSwapChainRelease(swapchain);
 
     const pipelines = try Pipelines.init(device, swapchain_format);
@@ -110,9 +113,17 @@ pub fn init(
     });
     errdefer c.wgpuBindGroupRelease(uniform_bind_group);
 
+    // TODO: Fix pipeline alpha blending to be the same on lRGB and sRGB in both WebGPU and Vulkan backends.
+    const srgb_to_lrgb_pass = if (isSrgb(swapchain_format)) SrgbToLrgbPass.init(device, swapchain_extent, swapchain_format) else null;
+    errdefer if (srgb_to_lrgb_pass) |*p| p.deinit();
+
+    const imgui_rt_format: c.WGPUTextureFormat = if (isSrgb(swapchain_format))
+        c.WGPUTextureFormat_BGRA8Unorm
+    else
+        swapchain_format;
+
     if (!c.ImGui_ImplGlfw_InitForOther(window, true)) return error.ImGuiGlfwInit;
-    // TODO: Check if ImGui colors are correct.
-    if (!c.ImGui_ImplWGPU_Init(device, 1, swapchain_format, c.WGPUTextureFormat_Undefined)) return error.ImGuiWGPUInit;
+    if (!c.ImGui_ImplWGPU_Init(device, 1, imgui_rt_format, c.WGPUTextureFormat_Undefined)) return error.ImGuiWGPUInit;
     errdefer c.ImGui_ImplWGPU_Shutdown();
 
     return .{
@@ -124,11 +135,12 @@ pub fn init(
         .error_logger = error_logger,
         .queue = queue,
         .swapchain_format = swapchain_format,
-        .surface_extent = surface_extent,
+        .swapchain_extent = swapchain_extent,
         .swapchain = swapchain,
         .pipelines = pipelines,
         .buffers = buffers,
         .uniform_bind_group = uniform_bind_group,
+        .srgb_to_lrgb_pass = srgb_to_lrgb_pass,
         .window = window,
         .wait_for_vsync = wait_for_vsync,
     };
@@ -136,6 +148,7 @@ pub fn init(
 
 pub fn deinit(self: *Self) void {
     c.ImGui_ImplWGPU_Shutdown();
+    if (self.srgb_to_lrgb_pass) |*p| p.deinit();
     c.wgpuBindGroupRelease(self.uniform_bind_group);
     self.buffers.deinit();
     self.pipelines.deinit();
@@ -149,18 +162,23 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !void {
-    const current_surface_extent = getSurfaceExtent(self.window);
-    if (self.is_graphics_outdated or !self.surface_extent.eql(current_surface_extent)) {
+    const current_swapchain_extent = getSurfaceExtent(self.window);
+    if (self.is_graphics_outdated or !self.swapchain_extent.eql(current_swapchain_extent)) {
         const old_swapchain = self.swapchain;
         self.swapchain = recreateSwapchain(
             self.device,
             self.surface,
-            current_surface_extent,
+            current_swapchain_extent,
             self.swapchain_format,
             self.wait_for_vsync,
         );
-        self.surface_extent = current_surface_extent;
+        self.swapchain_extent = current_swapchain_extent;
         c.wgpuSwapChainRelease(old_swapchain);
+
+        if (self.srgb_to_lrgb_pass) |*cc_pass| {
+            cc_pass.resize(self.device, self.swapchain_extent);
+        }
+
         self.is_graphics_outdated = false;
     }
 
@@ -173,6 +191,29 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
         return error.SwapchainTextureAcquire;
     };
     defer c.wgpuTextureViewRelease(next_texture);
+
+    if (self.srgb_to_lrgb_pass) |*cc_pass| {
+        const render_pass_color_attachment: c.WGPURenderPassColorAttachment = .{
+            .view = cc_pass.texture_view,
+            .loadOp = c.WGPULoadOp_Clear,
+            .storeOp = c.WGPUStoreOp_Store,
+            .clearValue = c.WGPUColor{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0 },
+        };
+
+        const render_pass_desc: c.WGPURenderPassDescriptor = .{
+            .label = "sRGB to lRGB Render Pass",
+            .colorAttachmentCount = 1,
+            .colorAttachments = &render_pass_color_attachment,
+        };
+        const render_pass = c.wgpuCommandEncoderBeginRenderPass(encoder, &render_pass_desc);
+
+        if (c.igGetDrawData()) |ig_draw_data| {
+            c.ImGui_ImplWGPU_RenderDrawData(ig_draw_data, render_pass);
+        }
+
+        c.wgpuRenderPassEncoderEnd(render_pass);
+        c.wgpuRenderPassEncoderRelease(render_pass);
+    }
 
     const render_pass_color_attachment: c.WGPURenderPassColorAttachment = .{
         .view = next_texture,
@@ -191,7 +232,7 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
     const game_size = math.vec2Cast(f32, game.size);
     const view = zlm.Mat4.createOrthogonal(0, game_size.x, 0, game_size.y, 0, 1);
 
-    const viewport = zlm.vec2(@floatFromInt(self.surface_extent.width), @floatFromInt(self.surface_extent.height));
+    const viewport = zlm.vec2(@floatFromInt(self.swapchain_extent.width), @floatFromInt(self.swapchain_extent.height));
     const aspect_ratio = (viewport.x / game_size.x) / (viewport.y / game_size.y);
     const aspect = if (viewport.x >= viewport.y)
         zlm.vec2(1.0 / aspect_ratio, 1)
@@ -203,6 +244,7 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
         .aspect = aspect,
         .viewport_size = viewport,
         .time = game.time,
+        .color_correction = if (isSrgb(self.swapchain_format)) 0 else 1,
     };
 
     self.buffers.update(self.device, self.queue, &ubo, draw_list);
@@ -231,15 +273,34 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
         c.wgpuRenderPassEncoderDrawIndexed(render_pass, self.buffers.rect_index.len, self.buffers.rect_instance.len, 0, 0, 0);
     }
 
-    // TODO: Pixel mask.
+    const masks = try self.allocator.alloc(Mask, draw_list.rect_masks.items.len);
+    defer self.allocator.free(masks);
+
+    for (masks, draw_list.rect_masks.items) |*m, rm| {
+        m.* = Mask.init(self.device, self.pipelines.mask_bind_group_layout, .{
+            .width = rm.width,
+            .height = rm.height,
+        });
+
+        m.write(self.queue, rm.pixels);
+    }
+    defer for (masks) |*m| m.deinit();
+
     if (self.buffers.masked_rect_instance.len > 0) {
         c.wgpuRenderPassEncoderSetPipeline(render_pass, self.pipelines.masked_rect);
         c.wgpuRenderPassEncoderSetVertexBuffer(render_pass, 1, self.buffers.masked_rect_instance.handle, 0, @sizeOf(Instance) * @as(u64, self.buffers.masked_rect_instance.len));
-        c.wgpuRenderPassEncoderDrawIndexed(render_pass, self.buffers.rect_index.len, self.buffers.masked_rect_instance.len, 0, 0, 0);
+
+        for (masks, 0..) |mask, i| {
+            c.wgpuRenderPassEncoderSetBindGroup(render_pass, 1, mask.bind_group, 0, null);
+            c.wgpuRenderPassEncoderDrawIndexed(render_pass, self.buffers.rect_index.len, 1, 0, 0, @intCast(i));
+        }
     }
 
-    // TODO: ImGui color correction.
-    if (c.igGetDrawData()) |ig_draw_data| {
+    if (self.srgb_to_lrgb_pass) |*cc_pass| {
+        c.wgpuRenderPassEncoderSetBindGroup(render_pass, 0, cc_pass.bind_group, 0, null);
+        c.wgpuRenderPassEncoderSetPipeline(render_pass, cc_pass.pipeline);
+        c.wgpuRenderPassEncoderDraw(render_pass, 6, 1, 0, 0);
+    } else if (c.igGetDrawData()) |ig_draw_data| {
         c.ImGui_ImplWGPU_RenderDrawData(ig_draw_data, render_pass);
     }
 
@@ -318,19 +379,387 @@ fn getSurfaceExtent(window: *c.GLFWwindow) Extent2D {
 fn recreateSwapchain(
     device: c.WGPUDevice,
     surface: c.WGPUSurface,
-    surface_extent: Extent2D,
+    swapchain_extent: Extent2D,
     swapchain_format: c.WGPUTextureFormat,
     wait_for_vsync: bool,
 ) c.WGPUSwapChain {
     var swapchain_desc: c.WGPUSwapChainDescriptor = .{
         .label = "Main Swapchain",
-        .width = surface_extent.width,
-        .height = surface_extent.height,
+        .width = swapchain_extent.width,
+        .height = swapchain_extent.height,
         .format = swapchain_format,
         .usage = c.WGPUTextureUsage_RenderAttachment,
         .presentMode = if (wait_for_vsync) c.WGPUPresentMode_Fifo else c.WGPUPresentMode_Mailbox,
     };
     return c.wgpuDeviceCreateSwapChain(device, surface, &swapchain_desc);
+}
+
+const Mask = struct {
+    texture: c.WGPUTexture,
+    extent: Extent2D,
+    texture_view: c.WGPUTextureView,
+    sampler: c.WGPUSampler,
+    bind_group: c.WGPUBindGroup,
+
+    const format = c.WGPUTextureFormat_R8Unorm;
+
+    pub fn init(device: c.WGPUDevice, bind_group_layout: c.WGPUBindGroupLayout, extent: Extent2D) Mask {
+        const texture = c.wgpuDeviceCreateTexture(device, &.{
+            .label = "Mask Texture",
+            .size = .{
+                .width = extent.width,
+                .height = extent.height,
+                .depthOrArrayLayers = 1,
+            },
+            .format = format,
+            .dimension = c.WGPUTextureDimension_2D,
+            .mipLevelCount = 1,
+            .sampleCount = 1,
+            .usage = c.WGPUTextureUsage_TextureBinding | c.WGPUTextureUsage_CopyDst,
+        });
+        errdefer c.wgpuTextureRelease(texture);
+
+        const texture_view = c.wgpuTextureCreateView(texture, &.{
+            .label = "Mask Texture View",
+            .format = format,
+            .dimension = c.WGPUTextureViewDimension_2D,
+            .mipLevelCount = 1,
+            .baseMipLevel = 0,
+            .arrayLayerCount = 1,
+            .baseArrayLayer = 0,
+            .aspect = c.WGPUTextureAspect_All,
+        });
+        errdefer c.wgpuTextureViewRelease(texture_view);
+
+        const sampler = c.wgpuDeviceCreateSampler(device, &.{
+            .label = "Mask Sampler",
+            .addressModeU = c.WGPUAddressMode_ClampToEdge,
+            .addressModeV = c.WGPUAddressMode_ClampToEdge,
+            .addressModeW = c.WGPUAddressMode_ClampToEdge,
+            .magFilter = c.WGPUFilterMode_Nearest,
+            .minFilter = c.WGPUFilterMode_Nearest,
+            .mipmapFilter = c.WGPUFilterMode_Nearest,
+            .lodMinClamp = 0.0,
+            .lodMaxClamp = 32.0,
+            .compare = c.WGPUCompareFunction_Undefined,
+            .maxAnisotropy = 1.0,
+        });
+        errdefer c.wgpuSamplerRelease(sampler);
+
+        const bind_group_entries = [_]c.WGPUBindGroupEntry{
+            .{
+                .binding = 0,
+                .textureView = texture_view,
+            },
+            .{
+                .binding = 1,
+                .sampler = sampler,
+            },
+        };
+        const bind_group = c.wgpuDeviceCreateBindGroup(device, &.{
+            .label = "sRGB to lRGB Bind Group",
+            .layout = bind_group_layout,
+            .entryCount = bind_group_entries.len,
+            .entries = &bind_group_entries,
+        });
+        errdefer c.wgpuBindGroupRelease(bind_group);
+
+        return .{
+            .texture = texture,
+            .extent = extent,
+            .texture_view = texture_view,
+            .sampler = sampler,
+            .bind_group = bind_group,
+        };
+    }
+
+    pub fn deinit(self: *const Mask) void {
+        c.wgpuBindGroupRelease(self.bind_group);
+        c.wgpuSamplerRelease(self.sampler);
+        c.wgpuTextureViewRelease(self.texture_view);
+        c.wgpuTextureRelease(self.texture);
+    }
+
+    pub fn write(self: *const Mask, queue: c.WGPUQueue, pixels: []const u8) void {
+        const mask_size = self.extent.width * self.extent.height;
+        std.debug.assert(pixels.len >= mask_size);
+
+        c.wgpuQueueWriteTexture(queue, &.{
+            .texture = self.texture,
+            .mipLevel = 0,
+            .origin = .{ .x = 0, .y = 0, .z = 0 },
+            .aspect = c.WGPUTextureAspect_All,
+        }, pixels.ptr, pixels.len, &.{
+            .offset = 0,
+            .bytesPerRow = self.extent.width,
+            .rowsPerImage = self.extent.height,
+        }, &.{
+            .width = self.extent.width,
+            .height = self.extent.height,
+            .depthOrArrayLayers = 1,
+        });
+    }
+};
+
+const SrgbToLrgbPass = struct {
+    texture: c.WGPUTexture,
+    texture_view: c.WGPUTextureView,
+    sampler: c.WGPUSampler,
+    bind_group_layout: c.WGPUBindGroupLayout,
+    bind_group: c.WGPUBindGroup,
+    pipeline: c.WGPURenderPipeline,
+
+    pub fn init(device: c.WGPUDevice, swapchain_extent: Extent2D, swapchain_format: c.WGPUTextureFormat) SrgbToLrgbPass {
+        const texture = createTexture(device, swapchain_extent);
+        errdefer c.wgpuTextureRelease(texture);
+
+        const texture_view = c.wgpuTextureCreateView(texture, &.{
+            .label = "sRGB to lRGB View",
+            .format = c.WGPUTextureFormat_BGRA8Unorm,
+            .dimension = c.WGPUTextureViewDimension_2D,
+            .mipLevelCount = 1,
+            .baseMipLevel = 0,
+            .arrayLayerCount = 1,
+            .baseArrayLayer = 0,
+            .aspect = c.WGPUTextureAspect_All,
+        });
+        errdefer c.wgpuTextureViewRelease(texture_view);
+
+        const sampler = c.wgpuDeviceCreateSampler(device, &.{
+            .label = "sRGB to lRGB Sampler",
+            .addressModeU = c.WGPUAddressMode_ClampToEdge,
+            .addressModeV = c.WGPUAddressMode_ClampToEdge,
+            .addressModeW = c.WGPUAddressMode_ClampToEdge,
+            .magFilter = c.WGPUFilterMode_Linear,
+            .minFilter = c.WGPUFilterMode_Nearest,
+            .mipmapFilter = c.WGPUFilterMode_Nearest,
+            .lodMinClamp = 0.0,
+            .lodMaxClamp = 32.0,
+            .compare = c.WGPUCompareFunction_Undefined,
+            .maxAnisotropy = 1.0,
+        });
+        errdefer c.wgpuSamplerRelease(sampler);
+
+        const bind_group_layout_entries = [_]c.WGPUBindGroupLayoutEntry{
+            .{
+                .binding = 0,
+                .visibility = c.WGPUShaderStage_Fragment,
+                .texture = .{
+                    .sampleType = c.WGPUTextureSampleType_Float,
+                    .viewDimension = c.WGPUTextureViewDimension_2D,
+                },
+            },
+            .{
+                .binding = 1,
+                .visibility = c.WGPUShaderStage_Fragment,
+                .sampler = .{ .type = c.WGPUSamplerBindingType_Filtering },
+            },
+        };
+        const bind_group_layout = c.wgpuDeviceCreateBindGroupLayout(device, &.{
+            .label = "sRGB to lRGB Bind Group Layout",
+            .entryCount = bind_group_layout_entries.len,
+            .entries = &bind_group_layout_entries,
+        });
+        errdefer c.wgpuBindGroupLayoutRelease(bind_group_layout);
+
+        const bind_group_entries = [_]c.WGPUBindGroupEntry{
+            .{
+                .binding = 0,
+                .textureView = texture_view,
+            },
+            .{
+                .binding = 1,
+                .sampler = sampler,
+            },
+        };
+        const bind_group = c.wgpuDeviceCreateBindGroup(device, &.{
+            .label = "sRGB to lRGB Bind Group",
+            .layout = bind_group_layout,
+            .entryCount = bind_group_entries.len,
+            .entries = &bind_group_entries,
+        });
+        errdefer c.wgpuBindGroupRelease(bind_group);
+
+        const pipeline = createPipeline(device, swapchain_format, bind_group_layout);
+        errdefer c.wgpuRenderPipelineRelease(pipeline);
+
+        return .{
+            .texture = texture,
+            .texture_view = texture_view,
+            .sampler = sampler,
+            .bind_group_layout = bind_group_layout,
+            .bind_group = bind_group,
+            .pipeline = pipeline,
+        };
+    }
+
+    pub fn deinit(self: *const SrgbToLrgbPass) void {
+        c.wgpuRenderPipelineRelease(self.pipeline);
+        c.wgpuBindGroupRelease(self.bind_group);
+        c.wgpuBindGroupLayoutRelease(self.bind_group_layout);
+        c.wgpuSamplerRelease(self.sampler);
+        c.wgpuTextureViewRelease(self.texture_view);
+        c.wgpuTextureRelease(self.texture);
+    }
+
+    pub fn resize(self: *SrgbToLrgbPass, device: c.WGPUDevice, swapchain_extent: Extent2D) void {
+        const old_texture = self.texture;
+        const old_view = self.texture_view;
+        self.texture = createTexture(device, swapchain_extent);
+        self.texture_view = c.wgpuTextureCreateView(self.texture, &.{
+            .label = "sRGB to lRGB View",
+            .format = c.WGPUTextureFormat_BGRA8Unorm,
+            .dimension = c.WGPUTextureViewDimension_2D,
+            .mipLevelCount = 1,
+            .baseMipLevel = 0,
+            .arrayLayerCount = 1,
+            .baseArrayLayer = 0,
+            .aspect = c.WGPUTextureAspect_All,
+        });
+        c.wgpuTextureViewRelease(old_view);
+        c.wgpuTextureRelease(old_texture);
+
+        const bind_group_entries = [_]c.WGPUBindGroupEntry{
+            .{
+                .binding = 0,
+                .textureView = self.texture_view,
+            },
+            .{
+                .binding = 1,
+                .sampler = self.sampler,
+            },
+        };
+        const old_bind_group = self.bind_group;
+        self.bind_group = c.wgpuDeviceCreateBindGroup(device, &.{
+            .label = "sRGB to lRGB Bind Group",
+            .layout = self.bind_group_layout,
+            .entryCount = bind_group_entries.len,
+            .entries = &bind_group_entries,
+        });
+        c.wgpuBindGroupRelease(old_bind_group);
+    }
+
+    fn createTexture(device: c.WGPUDevice, swapchain_extent: Extent2D) c.WGPUTexture {
+        return c.wgpuDeviceCreateTexture(device, &.{
+            .label = "sRGB to lRGB Texture",
+            .size = .{
+                .width = swapchain_extent.width,
+                .height = swapchain_extent.height,
+                .depthOrArrayLayers = 1,
+            },
+            .format = c.WGPUTextureFormat_BGRA8Unorm,
+            .dimension = c.WGPUTextureDimension_2D,
+            .mipLevelCount = 1,
+            .sampleCount = 1,
+            .usage = c.WGPUTextureUsage_TextureBinding | c.WGPUTextureUsage_RenderAttachment,
+        });
+    }
+
+    fn createPipeline(device: c.WGPUDevice, swapchain_format: c.WGPUTextureFormat, bind_group_layout: c.WGPUBindGroupLayout) c.WGPURenderPipeline {
+        const shader_code_desc: c.WGPUShaderModuleWGSLDescriptor = .{
+            .code = srgb_to_lrgb_shader_source,
+            .chain = .{ .sType = c.WGPUSType_ShaderModuleWGSLDescriptor },
+        };
+
+        const shader_desc: c.WGPUShaderModuleDescriptor = .{
+            .label = "sRGB to lRGB Shader",
+            .nextInChain = &shader_code_desc.chain,
+        };
+        const shader_module = c.wgpuDeviceCreateShaderModule(device, &shader_desc);
+        defer c.wgpuShaderModuleRelease(shader_module);
+
+        const blend_state: c.WGPUBlendState = .{
+            .color = .{
+                .srcFactor = c.WGPUBlendFactor_SrcAlpha,
+                .dstFactor = c.WGPUBlendFactor_OneMinusSrcAlpha,
+                .operation = c.WGPUBlendOperation_Add,
+            },
+            .alpha = .{
+                .srcFactor = c.WGPUBlendFactor_SrcAlpha,
+                .dstFactor = c.WGPUBlendFactor_OneMinusSrcAlpha,
+                .operation = c.WGPUBlendOperation_Subtract,
+            },
+        };
+
+        const color_target: c.WGPUColorTargetState = .{
+            .format = swapchain_format,
+            .blend = &blend_state,
+            .writeMask = c.WGPUColorWriteMask_All,
+        };
+
+        const fragment_state: c.WGPUFragmentState = .{
+            .module = shader_module,
+            .entryPoint = "fs_main",
+            .constantCount = 0,
+            .constants = null,
+            .targetCount = 1,
+            .targets = &color_target,
+        };
+
+        const layout = c.wgpuDeviceCreatePipelineLayout(device, &.{
+            .label = "sRGB to lRGB Pipeline Layout",
+            .bindGroupLayoutCount = 1,
+            .bindGroupLayouts = &bind_group_layout,
+        });
+        defer c.wgpuPipelineLayoutRelease(layout);
+
+        const desc: c.WGPURenderPipelineDescriptor = .{
+            .label = "sRGB to lRGB Pipeline",
+            .vertex = .{
+                .bufferCount = 0,
+                .buffers = null,
+                .module = shader_module,
+                .entryPoint = "vs_main",
+                .constantCount = 0,
+                .constants = null,
+            },
+            .fragment = &fragment_state,
+            .primitive = .{
+                .topology = c.WGPUPrimitiveTopology_TriangleList,
+                .stripIndexFormat = c.WGPUIndexFormat_Undefined,
+                .frontFace = c.WGPUFrontFace_CCW,
+                .cullMode = c.WGPUCullMode_None,
+            },
+            .depthStencil = null,
+            .multisample = .{
+                .count = 1,
+                .mask = ~@as(u32, 0),
+            },
+            .layout = layout,
+        };
+
+        return c.wgpuDeviceCreateRenderPipeline(device, &desc);
+    }
+};
+
+fn isSrgb(format: c.WGPUTextureFormat) bool {
+    return switch (format) {
+        c.WGPUTextureFormat_RGBA8UnormSrgb,
+        c.WGPUTextureFormat_BGRA8UnormSrgb,
+        c.WGPUTextureFormat_BC1RGBAUnormSrgb,
+        c.WGPUTextureFormat_BC2RGBAUnormSrgb,
+        c.WGPUTextureFormat_BC3RGBAUnormSrgb,
+        c.WGPUTextureFormat_BC7RGBAUnormSrgb,
+        c.WGPUTextureFormat_ETC2RGB8UnormSrgb,
+        c.WGPUTextureFormat_ETC2RGB8A1UnormSrgb,
+        c.WGPUTextureFormat_ETC2RGBA8UnormSrgb,
+        c.WGPUTextureFormat_ASTC4x4UnormSrgb,
+        c.WGPUTextureFormat_ASTC5x4UnormSrgb,
+        c.WGPUTextureFormat_ASTC5x5UnormSrgb,
+        c.WGPUTextureFormat_ASTC6x5UnormSrgb,
+        c.WGPUTextureFormat_ASTC6x6UnormSrgb,
+        c.WGPUTextureFormat_ASTC8x5UnormSrgb,
+        c.WGPUTextureFormat_ASTC8x6UnormSrgb,
+        c.WGPUTextureFormat_ASTC8x8UnormSrgb,
+        c.WGPUTextureFormat_ASTC10x5UnormSrgb,
+        c.WGPUTextureFormat_ASTC10x6UnormSrgb,
+        c.WGPUTextureFormat_ASTC10x8UnormSrgb,
+        c.WGPUTextureFormat_ASTC10x10UnormSrgb,
+        c.WGPUTextureFormat_ASTC12x10UnormSrgb,
+        c.WGPUTextureFormat_ASTC12x12UnormSrgb,
+        => true,
+        else => false,
+    };
 }
 
 const Buffers = struct {
@@ -492,6 +921,7 @@ const Pipelines = struct {
     point: c.WGPURenderPipeline,
     line: c.WGPURenderPipeline,
     bind_group_layout: c.WGPUBindGroupLayout,
+    mask_bind_group_layout: c.WGPUBindGroupLayout,
 
     pub fn init(device: c.WGPUDevice, swapchain_format: c.WGPUTextureFormat) !Pipelines {
         const shader_code_desc: c.WGPUShaderModuleWGSLDescriptor = .{
@@ -506,7 +936,7 @@ const Pipelines = struct {
         const shader_module = c.wgpuDeviceCreateShaderModule(device, &shader_desc);
         defer c.wgpuShaderModuleRelease(shader_module);
 
-        const bind_group_layout_entry: c.WGPUBindGroupLayoutEntry = .{
+        const uniform_bind_group_layout_entry: c.WGPUBindGroupLayoutEntry = .{
             .binding = 0,
             .visibility = c.WGPUShaderStage_Vertex | c.WGPUShaderStage_Fragment,
             .buffer = .{
@@ -517,31 +947,54 @@ const Pipelines = struct {
         const bind_group_layout = c.wgpuDeviceCreateBindGroupLayout(device, &.{
             .label = "UBO Bind Group Layout",
             .entryCount = 1,
-            .entries = &bind_group_layout_entry,
+            .entries = &uniform_bind_group_layout_entry,
         });
         errdefer c.wgpuBindGroupLayoutRelease(bind_group_layout);
+
+        const mask_bind_group_layout_entries = [_]c.WGPUBindGroupLayoutEntry{
+            .{
+                .binding = 0,
+                .visibility = c.WGPUShaderStage_Fragment,
+                .texture = .{
+                    .sampleType = c.WGPUTextureSampleType_Float,
+                    .viewDimension = c.WGPUTextureViewDimension_2D,
+                },
+            },
+            .{
+                .binding = 1,
+                .visibility = c.WGPUShaderStage_Fragment,
+                .sampler = .{ .type = c.WGPUSamplerBindingType_Filtering },
+            },
+        };
+        const mask_bind_group_layout = c.wgpuDeviceCreateBindGroupLayout(device, &.{
+            .label = "Mask Bind Group Layout",
+            .entryCount = mask_bind_group_layout_entries.len,
+            .entries = &mask_bind_group_layout_entries,
+        });
+        errdefer c.wgpuBindGroupLayoutRelease(mask_bind_group_layout);
 
         const rect = createRenderPipeline(
             Vertex,
             Instance,
             device,
             swapchain_format,
-            bind_group_layout,
+            &[_]c.WGPUBindGroupLayout{bind_group_layout},
             shader_module,
             "vs_triangle_main",
+            "fs_main",
             c.WGPUPrimitiveTopology_TriangleList,
         );
         errdefer c.wgpuRenderPipelineRelease(rect);
 
-        // TODO: Make this different somehow or merge it with rect if no difference is needed.
         const masked_rect = createRenderPipeline(
             Vertex,
             Instance,
             device,
             swapchain_format,
-            bind_group_layout,
+            &[_]c.WGPUBindGroupLayout{ bind_group_layout, mask_bind_group_layout },
             shader_module,
             "vs_triangle_main",
+            "fs_mask_main",
             c.WGPUPrimitiveTopology_TriangleList,
         );
         errdefer c.wgpuRenderPipelineRelease(masked_rect);
@@ -551,9 +1004,10 @@ const Pipelines = struct {
             null,
             device,
             swapchain_format,
-            bind_group_layout,
+            &[_]c.WGPUBindGroupLayout{bind_group_layout},
             shader_module,
             "vs_point_main",
+            "fs_main",
             c.WGPUPrimitiveTopology_PointList,
         );
         errdefer c.wgpuRenderPipelineRelease(point);
@@ -563,9 +1017,10 @@ const Pipelines = struct {
             null,
             device,
             swapchain_format,
-            bind_group_layout,
+            &[_]c.WGPUBindGroupLayout{bind_group_layout},
             shader_module,
             "vs_point_main",
+            "fs_main",
             c.WGPUPrimitiveTopology_LineList,
         );
         errdefer c.wgpuRenderPipelineRelease(line);
@@ -576,6 +1031,7 @@ const Pipelines = struct {
             .point = point,
             .line = line,
             .bind_group_layout = bind_group_layout,
+            .mask_bind_group_layout = mask_bind_group_layout,
         };
     }
 
@@ -585,6 +1041,7 @@ const Pipelines = struct {
         c.wgpuRenderPipelineRelease(self.point);
         c.wgpuRenderPipelineRelease(self.line);
 
+        c.wgpuBindGroupLayoutRelease(self.mask_bind_group_layout);
         c.wgpuBindGroupLayoutRelease(self.bind_group_layout);
     }
 };
@@ -594,12 +1051,12 @@ fn createRenderPipeline(
     comptime InstanceType: ?type,
     device: c.WGPUDevice,
     swapchain_format: c.WGPUTextureFormat,
-    bind_group_layout: c.WGPUBindGroupLayout,
+    bind_group_layouts: []const c.WGPUBindGroupLayout,
     shader_module: c.WGPUShaderModule,
     vs_entrypoint: [*:0]const u8,
+    fs_entrypoint: [*:0]const u8,
     topology: c.WGPUPrimitiveTopology,
 ) c.WGPURenderPipeline {
-    // TODO: Make sure blend state is the same as Vulkan.
     const blend_state: c.WGPUBlendState = .{
         .color = .{
             .srcFactor = c.WGPUBlendFactor_SrcAlpha,
@@ -621,7 +1078,7 @@ fn createRenderPipeline(
 
     const fragment_state: c.WGPUFragmentState = .{
         .module = shader_module,
-        .entryPoint = "fs_main",
+        .entryPoint = fs_entrypoint,
         .constantCount = 0,
         .constants = null,
         .targetCount = 1,
@@ -635,8 +1092,8 @@ fn createRenderPipeline(
 
     const layout = c.wgpuDeviceCreatePipelineLayout(device, &.{
         .label = "Render Pipeline Layout",
-        .bindGroupLayoutCount = 1,
-        .bindGroupLayouts = &bind_group_layout,
+        .bindGroupLayoutCount = @intCast(bind_group_layouts.len),
+        .bindGroupLayouts = bind_group_layouts.ptr,
     });
     defer c.wgpuPipelineLayoutRelease(layout);
 
@@ -661,7 +1118,6 @@ fn createRenderPipeline(
         .multisample = .{
             .count = 1,
             .mask = ~@as(u32, 0),
-            .alphaToCoverageEnabled = false,
         },
         .layout = layout,
     };

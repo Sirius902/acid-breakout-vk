@@ -1,14 +1,18 @@
 @group(0) @binding(0) var<uniform> ubo: UniformBufferObject;
 
+@group(1) @binding(0) var u_mask_texture: texture_2d<f32>;
+@group(1) @binding(1) var u_mask_sampler: sampler;
+
 struct UniformBufferObject {
     view: mat4x4<f32>,
     aspect: vec2<f32>,
     viewport_size: vec2<f32>,
     time: f32,
+    color_correction: u32,
 }
 
 struct VertexInput {
-    @location(0) position: vec2<f32>,
+    @location(0) pos: vec2<f32>,
     @location(1) uv: vec2<f32>,
 }
 
@@ -22,7 +26,7 @@ struct InstanceInput {
 }
 
 struct PointVertexInput {
-    @location(0) position: vec2<f32>,
+    @location(0) pos: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) shading: u32,
 }
@@ -44,7 +48,7 @@ fn vs_triangle_main(in: VertexInput, instance: InstanceInput) -> VertexOutput {
     );
 
     return VertexOutput(
-        ubo.view * model * vec4<f32>(in.position, 0.0, 1.0),
+        ubo.view * model * vec4<f32>(in.pos, 0.0, 1.0),
         instance.color,
         instance.shading,
         in.uv,
@@ -54,27 +58,61 @@ fn vs_triangle_main(in: VertexInput, instance: InstanceInput) -> VertexOutput {
 @vertex
 fn vs_point_main(in: PointVertexInput) -> VertexOutput {
     return VertexOutput(
-        ubo.view * vec4<f32>(in.position, 0.0, 1.0),
+        ubo.view * vec4<f32>(in.pos, 0.0, 1.0),
         in.color,
         in.shading,
         vec2<f32>(0.0),
     );
 }
 
-// TODO: Color correct only if the swapchain texture format is SRGB.
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pos = (in.frag_coord.xy / ubo.viewport_size - 0.5) / ubo.aspect + 0.5;
     var color: vec4<f32>;
 
-    if in.shading == 0u { // SHADING_COLOR
-        // TODO: This should probably be color corrected, both in the Vulkan shader and here.
-        color = in.frag_color;
-    } else if in.shading == 1u { // SHADING_RAINBOW
-        color = vec4<f32>(lrgb_from_hsv(vec3<f32>(pos.x * radians(360.0), 1.0, 1.0)), in.frag_color.a);
-    } else { // SHADING_RAINBOW_SCROLL
-        color = vec4<f32>(lrgb_from_hsv(vec3<f32>(pos.x * radians(360.0) + ubo.time, 1.0, 1.0)), in.frag_color.a);
+    switch in.shading {
+        case 0u: { // SHADING_COLOR
+            color = in.frag_color;
+        }
+        case 1u: { // SHADING_RAINBOW
+            color = vec4<f32>(lrgb_from_hsv(vec3<f32>(pos.x * radians(360.0), 1.0, 1.0)), in.frag_color.a);
+        }
+        case 2u: { // SHADING_RAINBOW_SCROLL
+            color = vec4<f32>(lrgb_from_hsv(vec3<f32>(pos.x * radians(360.0) + ubo.time, 1.0, 1.0)), in.frag_color.a);
+        }
+        default: {}
     }
+
+    if ubo.color_correction != 0u {
+        color = vec4<f32>(srgb_from_lrgb(color.rgb), color.a);
+    }
+
+    return color;
+}
+
+@fragment
+fn fs_mask_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let pos = (in.frag_coord.xy / ubo.viewport_size - 0.5) / ubo.aspect + 0.5;
+    var color: vec4<f32>;
+
+    switch in.shading {
+        case 0u: { // SHADING_COLOR
+            color = in.frag_color;
+        }
+        case 1u: { // SHADING_RAINBOW
+            color = vec4<f32>(lrgb_from_hsv(vec3<f32>(pos.x * radians(360.0), 1.0, 1.0)), in.frag_color.a);
+        }
+        case 2u: { // SHADING_RAINBOW_SCROLL
+            color = vec4<f32>(lrgb_from_hsv(vec3<f32>(pos.x * radians(360.0) + ubo.time, 1.0, 1.0)), in.frag_color.a);
+        }
+        default: {}
+    }
+
+    if ubo.color_correction != 0u {
+        color = vec4<f32>(srgb_from_lrgb(color.rgb), color.a);
+    }
+
+    color.a = textureSample(u_mask_texture, u_mask_sampler, in.uv).r;
 
     return color;
 }
@@ -87,16 +125,28 @@ fn inv_gamma(c: f32) -> f32 {
     }
 }
 
-fn lrgb_from_srgb(lrgb: vec3<f32>) -> vec3<f32> {
+fn lrgb_from_srgb(srgb: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(
-        inv_gamma(lrgb.r),
-        inv_gamma(lrgb.g),
-        inv_gamma(lrgb.b),
+        inv_gamma(srgb.r),
+        inv_gamma(srgb.g),
+        inv_gamma(srgb.b),
     );
 }
 
 fn lrgb_from_hsv(hsv: vec3<f32>) -> vec3<f32> {
     return lrgb_from_srgb(srgb_from_hsv(hsv));
+}
+
+fn gamma(u: f32) -> f32 {
+    if u <= 0.0031308 {
+        return 12.92 * u;
+    } else {
+        return (1.055 * pow(u, 1.0 / 2.4)) - 0.055;
+    }
+}
+
+fn srgb_from_lrgb(lrgb: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(gamma(lrgb.r), gamma(lrgb.g), gamma(lrgb.b));
 }
 
 fn hsv_f(hsv: vec3<f32>, n: f32) -> f32 {
