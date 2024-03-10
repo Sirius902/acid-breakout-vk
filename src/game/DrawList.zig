@@ -1,4 +1,5 @@
 const std = @import("std");
+const c = @import("../c.zig");
 const vk = @import("vulkan");
 const zlm = @import("zlm");
 const Allocator = std.mem.Allocator;
@@ -83,6 +84,46 @@ pub const Instance = struct {
             .offset = @offsetOf(Instance, "shading"),
         },
     };
+
+    pub const wgpu_buffer_layout = c.WGPUVertexBufferLayout{
+        .arrayStride = @sizeOf(Instance),
+        .stepMode = c.WGPUVertexStepMode_Instance,
+        .attributeCount = wgpu_attributes.len,
+        .attributes = &wgpu_attributes,
+    };
+
+    pub const wgpu_attributes = [_]c.WGPUVertexAttribute{
+        .{
+            .shaderLocation = 2,
+            .format = c.WGPUVertexFormat_Float32x4,
+            .offset = @offsetOf(Instance, "model") + 0 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .shaderLocation = 3,
+            .format = c.WGPUVertexFormat_Float32x4,
+            .offset = @offsetOf(Instance, "model") + 1 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .shaderLocation = 4,
+            .format = c.WGPUVertexFormat_Float32x4,
+            .offset = @offsetOf(Instance, "model") + 2 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .shaderLocation = 5,
+            .format = c.WGPUVertexFormat_Float32x4,
+            .offset = @offsetOf(Instance, "model") + 3 * @sizeOf(zlm.Vec4),
+        },
+        .{
+            .shaderLocation = 6,
+            .format = c.WGPUVertexFormat_Float32x4,
+            .offset = @offsetOf(Instance, "color"),
+        },
+        .{
+            .shaderLocation = 7,
+            .format = c.WGPUVertexFormat_Uint32,
+            .offset = @offsetOf(Instance, "shading"),
+        },
+    };
 };
 
 pub const PointVertex = struct {
@@ -115,6 +156,31 @@ pub const PointVertex = struct {
             .binding = binding,
             .location = 2,
             .format = .r32_uint,
+            .offset = @offsetOf(PointVertex, "shading"),
+        },
+    };
+
+    pub const wgpu_buffer_layout = c.WGPUVertexBufferLayout{
+        .arrayStride = @sizeOf(PointVertex),
+        .stepMode = c.WGPUVertexStepMode_Vertex,
+        .attributeCount = wgpu_attributes.len,
+        .attributes = &wgpu_attributes,
+    };
+
+    pub const wgpu_attributes = [_]c.WGPUVertexAttribute{
+        .{
+            .shaderLocation = 0,
+            .format = c.WGPUVertexFormat_Float32x2,
+            .offset = @offsetOf(PointVertex, "pos"),
+        },
+        .{
+            .shaderLocation = 1,
+            .format = c.WGPUVertexFormat_Float32x4,
+            .offset = @offsetOf(PointVertex, "color"),
+        },
+        .{
+            .shaderLocation = 2,
+            .format = c.WGPUVertexFormat_Uint32,
             .offset = @offsetOf(PointVertex, "shading"),
         },
     };

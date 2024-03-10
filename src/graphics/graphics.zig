@@ -1,3 +1,4 @@
+const c = @import("../c.zig");
 const zlm = @import("zlm");
 const vk = @import("vulkan");
 
@@ -33,6 +34,26 @@ pub const Vertex = struct {
             .binding = binding,
             .location = 1,
             .format = .r32g32_sfloat,
+            .offset = @offsetOf(Vertex, "uv"),
+        },
+    };
+
+    pub const wgpu_buffer_layout = c.WGPUVertexBufferLayout{
+        .arrayStride = @sizeOf(Vertex),
+        .stepMode = c.WGPUVertexStepMode_Vertex,
+        .attributeCount = wgpu_attributes.len,
+        .attributes = &wgpu_attributes,
+    };
+
+    pub const wgpu_attributes = [_]c.WGPUVertexAttribute{
+        .{
+            .shaderLocation = 0,
+            .format = c.WGPUVertexFormat_Float32x2,
+            .offset = @offsetOf(Vertex, "pos"),
+        },
+        .{
+            .shaderLocation = 1,
+            .format = c.WGPUVertexFormat_Float32x2,
             .offset = @offsetOf(Vertex, "uv"),
         },
     };
