@@ -119,7 +119,7 @@ pub const AudioContext = struct {
     pub fn deinit(self: *AudioContext) void {
         if (builtin.os.tag != .emscripten) {
             if (self.thread) |t| {
-                self.stop_flag.store(true, .Release);
+                self.stop_flag.store(true, .release);
                 t.join();
             }
         }
@@ -142,11 +142,11 @@ pub const AudioContext = struct {
     }
 
     pub fn getListenerGain(self: *const AudioContext) f32 {
-        return self.listener_gain.load(.Acquire);
+        return self.listener_gain.load(.acquire);
     }
 
     pub fn setListenerGain(self: *AudioContext, gain: f32) void {
-        self.listener_gain.store(gain, .Release);
+        self.listener_gain.store(gain, .release);
     }
 
     pub fn isMuted(self: *const AudioContext) bool {
@@ -154,11 +154,11 @@ pub const AudioContext = struct {
     }
 
     pub fn getSourcePitchVariance(self: *const AudioContext) f32 {
-        return self.source_pitch_variance.load(.Acquire);
+        return self.source_pitch_variance.load(.acquire);
     }
 
     pub fn setSourcePitchVariance(self: *AudioContext, variance: f32) void {
-        self.source_pitch_variance.store(variance, .Release);
+        self.source_pitch_variance.store(variance, .release);
     }
 
     pub fn cacheSound(self: *AudioContext, sound: *const Sound) !void {
@@ -216,7 +216,7 @@ pub const AudioContext = struct {
         return if (builtin.os.tag == .emscripten)
             0.0
         else
-            1.0 / self.avg_ticktime_s.load(.Acquire);
+            1.0 / self.avg_ticktime_s.load(.acquire);
     }
 
     /// On multi-threaded platforms this will be called automatically in a dedicated audio thread. Otherwise, it must be called manually.
@@ -237,7 +237,7 @@ pub const AudioContext = struct {
 
     fn audioThread(self: *AudioContext) void {
         var tick_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
-        while (!self.stop_flag.load(.Acquire)) {
+        while (!self.stop_flag.load(.acquire)) {
             tick_timer.reset();
             self.tickAudio() catch |err| log.err("Audio thread error: {}", .{err});
 
@@ -248,7 +248,7 @@ pub const AudioContext = struct {
 
             const alpha = 0.2;
             const ticktime_s = @as(f64, @floatFromInt(tick_timer.read())) / std.time.ns_per_s;
-            self.avg_ticktime_s.store(alpha * ticktime_s + (1 - alpha) * self.avg_ticktime_s.load(.Unordered), .Release);
+            self.avg_ticktime_s.store(alpha * ticktime_s + (1 - alpha) * self.avg_ticktime_s.load(.unordered), .release);
         }
     }
 
