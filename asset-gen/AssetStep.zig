@@ -64,7 +64,7 @@ pub fn addAsset(self: *Self, info: AssetInfo) void {
 
 pub fn make(step: *std.Build.Step, progress: *std.Progress.Node) !void {
     _ = progress;
-    const self = @fieldParentPtr(Self, "step", step);
+    const self: *Self = @fieldParentPtr("step", step);
     const b = self.step.owner;
 
     const AssetPaths = struct {

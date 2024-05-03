@@ -13,103 +13,23 @@ const debug_layers: ?[]const [*:0]const u8 = if (debug_enabled)
 else
     null;
 
-const required_device_extensions = [_][*:0]const u8{vk.extension_info.khr_swapchain.name};
+const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
 
-const BaseDispatch = vk.BaseWrapper(.{
-    .createInstance = true,
-    .getInstanceProcAddr = true,
-});
+const apis: []const vk.ApiInfo = &.{
+    .{
+        .instance_commands = .{
+            .createDebugUtilsMessengerEXT = debug_enabled,
+            .destroyDebugUtilsMessengerEXT = debug_enabled,
+        },
+    },
+    vk.features.version_1_0,
+    vk.extensions.khr_surface,
+    vk.extensions.khr_swapchain,
+};
 
-const InstanceDispatch = vk.InstanceWrapper(.{
-    .destroyInstance = true,
-    .createDevice = true,
-    .destroySurfaceKHR = true,
-    .enumeratePhysicalDevices = true,
-    .getPhysicalDeviceProperties = true,
-    .enumerateDeviceExtensionProperties = true,
-    .getPhysicalDeviceSurfaceFormatsKHR = true,
-    .getPhysicalDeviceSurfacePresentModesKHR = true,
-    .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
-    .getPhysicalDeviceQueueFamilyProperties = true,
-    .getPhysicalDeviceSurfaceSupportKHR = true,
-    .getPhysicalDeviceMemoryProperties = true,
-    .getDeviceProcAddr = true,
-    .createDebugUtilsMessengerEXT = debug_enabled,
-    .destroyDebugUtilsMessengerEXT = debug_enabled,
-});
-
-const DeviceDispatch = vk.DeviceWrapper(.{
-    .destroyDevice = true,
-    .getDeviceQueue = true,
-    .createSemaphore = true,
-    .createFence = true,
-    .createImageView = true,
-    .destroyImageView = true,
-    .destroySemaphore = true,
-    .destroyFence = true,
-    .getSwapchainImagesKHR = true,
-    .createSwapchainKHR = true,
-    .destroySwapchainKHR = true,
-    .acquireNextImageKHR = true,
-    .deviceWaitIdle = true,
-    .waitForFences = true,
-    .resetFences = true,
-    .queueSubmit = true,
-    .queuePresentKHR = true,
-    .createCommandPool = true,
-    .destroyCommandPool = true,
-    .allocateCommandBuffers = true,
-    .freeCommandBuffers = true,
-    .queueWaitIdle = true,
-    .createShaderModule = true,
-    .destroyShaderModule = true,
-    .createPipelineLayout = true,
-    .destroyPipelineLayout = true,
-    .createRenderPass = true,
-    .destroyRenderPass = true,
-    .createGraphicsPipelines = true,
-    .destroyPipeline = true,
-    .createFramebuffer = true,
-    .destroyFramebuffer = true,
-    .beginCommandBuffer = true,
-    .endCommandBuffer = true,
-    .allocateMemory = true,
-    .freeMemory = true,
-    .createBuffer = true,
-    .destroyBuffer = true,
-    .getBufferMemoryRequirements = true,
-    .mapMemory = true,
-    .unmapMemory = true,
-    .bindBufferMemory = true,
-    .cmdBeginRenderPass = true,
-    .cmdEndRenderPass = true,
-    .cmdBindPipeline = true,
-    .cmdDraw = true,
-    .cmdSetViewport = true,
-    .cmdSetScissor = true,
-    .cmdBindVertexBuffers = true,
-    .cmdCopyBuffer = true,
-    .createDescriptorPool = true,
-    .destroyDescriptorPool = true,
-    .resetCommandBuffer = true,
-    .createImage = true,
-    .destroyImage = true,
-    .createDescriptorSetLayout = true,
-    .destroyDescriptorSetLayout = true,
-    .allocateDescriptorSets = true,
-    .freeDescriptorSets = true,
-    .updateDescriptorSets = true,
-    .createSampler = true,
-    .destroySampler = true,
-    .cmdBindDescriptorSets = true,
-    .getImageMemoryRequirements = true,
-    .bindImageMemory = true,
-    .cmdBindIndexBuffer = true,
-    .cmdDrawIndexed = true,
-    .cmdPushConstants = true,
-    .cmdCopyBufferToImage = true,
-    .cmdPipelineBarrier = true,
-});
+const BaseDispatch = vk.BaseWrapper(apis);
+const InstanceDispatch = vk.InstanceWrapper(apis);
+const DeviceDispatch = vk.DeviceWrapper(apis);
 
 pub const GraphicsContext = struct {
     allocator: Allocator,
@@ -153,7 +73,7 @@ pub const GraphicsContext = struct {
 
         try extensions.appendSlice(@as([*]const [*:0]const u8, @ptrCast(glfw_exts))[0..glfw_exts_count]);
         if (debug_enabled) {
-            try extensions.append(vk.extension_info.ext_debug_utils.name);
+            try extensions.append(vk.extensions.ext_debug_utils.name);
         }
 
         self.instance = try self.vkb.createInstance(&.{
