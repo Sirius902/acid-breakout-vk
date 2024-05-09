@@ -133,79 +133,95 @@ fn addOptions(b: *std.Build, compile: *std.Build.Step.Compile, graphics: Graphic
 
 fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
     // Try to link libs using vcpkg on Windows
-    if (target.result.os.tag == .windows) {
-        const vcpkg_root = std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT") catch |err|
-            std.debug.panic("Expected VCPKG_ROOT env to be found: {}", .{err});
+    switch (target.result.os.tag) {
+        .windows => {
+            const vcpkg_root = std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT") catch |err|
+                std.debug.panic("Expected VCPKG_ROOT env to be found: {}", .{err});
 
-        const arch_str = switch (target.result.cpu.arch) {
-            .x86 => "x86",
-            .x86_64 => "x64",
-            .arm, .aarch64_32 => "arm",
-            .aarch64 => "arm64",
-            .wasm32 => "wasm32",
-            else => std.debug.panic("Unsupported CPU architecture: {}", .{target.result.cpu.arch}),
-        };
+            const arch_str = switch (target.result.cpu.arch) {
+                .x86 => "x86",
+                .x86_64 => "x64",
+                .arm, .aarch64_32 => "arm",
+                .aarch64 => "arm64",
+                .wasm32 => "wasm32",
+                else => std.debug.panic("Unsupported CPU architecture: {}", .{target.result.cpu.arch}),
+            };
 
-        const vcpkg_installed_arch_path = b.pathJoin(&[_][]const u8{
-            vcpkg_root,
-            "installed",
-            std.mem.concat(b.allocator, u8, &[_][]const u8{ arch_str, "-windows" }) catch unreachable,
-        });
+            const vcpkg_installed_arch_path = b.pathJoin(&[_][]const u8{
+                vcpkg_root,
+                "installed",
+                std.mem.concat(b.allocator, u8, &[_][]const u8{ arch_str, "-windows" }) catch unreachable,
+            });
 
-        const vcpkg_lib_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "lib" });
-        const vcpkg_include_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "include" });
+            const vcpkg_lib_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "lib" });
+            const vcpkg_include_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "include" });
 
-        const lib_name = "glfw3";
+            const lib_name = "glfw3";
 
-        compile.addIncludePath(.{ .path = vcpkg_include_path });
-        compile.addLibraryPath(.{ .path = vcpkg_lib_path });
-        compile.linkSystemLibrary(lib_name ++ "dll");
+            compile.addIncludePath(.{ .path = vcpkg_include_path });
+            compile.addLibraryPath(.{ .path = vcpkg_lib_path });
+            compile.linkSystemLibrary(lib_name ++ "dll");
 
-        const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
+            const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
 
-        const install_lib = installSharedLibWindows(b, vcpkg_bin_path, lib_name);
-        compile.step.dependOn(&install_lib.step);
-    } else {
-        compile.linkSystemLibrary("glfw");
+            const install_lib = installSharedLibWindows(b, vcpkg_bin_path, lib_name);
+            compile.step.dependOn(&install_lib.step);
+        },
+        .macos => {
+            compile.addIncludePath(.{ .path = "/opt/homebrew/opt/glfw/include" });
+            compile.addLibraryPath(.{ .path = "/opt/homebrew/opt/glfw/lib" });
+            compile.linkSystemLibrary("glfw");
+        },
+        else => {
+            compile.linkSystemLibrary("glfw");
+        },
     }
 }
 
 fn linkOpenAl(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
     // Try to link libs using vcpkg on Windows
-    if (target.result.os.tag == .windows) {
-        const vcpkg_root = std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT") catch |err|
-            std.debug.panic("Expected VCPKG_ROOT env to be found: {}", .{err});
+    switch (target.result.os.tag) {
+        .windows => {
+            const vcpkg_root = std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT") catch |err|
+                std.debug.panic("Expected VCPKG_ROOT env to be found: {}", .{err});
 
-        const arch_str = switch (target.result.cpu.arch) {
-            .x86 => "x86",
-            .x86_64 => "x64",
-            .arm, .aarch64_32 => "arm",
-            .aarch64 => "arm64",
-            .wasm32 => "wasm32",
-            else => std.debug.panic("Unsupported CPU architecture: {}", .{target.result.cpu.arch}),
-        };
+            const arch_str = switch (target.result.cpu.arch) {
+                .x86 => "x86",
+                .x86_64 => "x64",
+                .arm, .aarch64_32 => "arm",
+                .aarch64 => "arm64",
+                .wasm32 => "wasm32",
+                else => std.debug.panic("Unsupported CPU architecture: {}", .{target.result.cpu.arch}),
+            };
 
-        const vcpkg_installed_arch_path = b.pathJoin(&[_][]const u8{
-            vcpkg_root,
-            "installed",
-            std.mem.concat(b.allocator, u8, &[_][]const u8{ arch_str, "-windows" }) catch unreachable,
-        });
+            const vcpkg_installed_arch_path = b.pathJoin(&[_][]const u8{
+                vcpkg_root,
+                "installed",
+                std.mem.concat(b.allocator, u8, &[_][]const u8{ arch_str, "-windows" }) catch unreachable,
+            });
 
-        const vcpkg_lib_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "lib" });
-        const vcpkg_include_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "include" });
+            const vcpkg_lib_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "lib" });
+            const vcpkg_include_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "include" });
 
-        const lib_name = "OpenAL32";
+            const lib_name = "OpenAL32";
 
-        compile.addIncludePath(.{ .path = vcpkg_include_path });
-        compile.addLibraryPath(.{ .path = vcpkg_lib_path });
-        compile.linkSystemLibrary(lib_name);
+            compile.addIncludePath(.{ .path = vcpkg_include_path });
+            compile.addLibraryPath(.{ .path = vcpkg_lib_path });
+            compile.linkSystemLibrary(lib_name);
 
-        const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
+            const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
 
-        const install_lib = installSharedLibWindows(b, vcpkg_bin_path, lib_name);
-        compile.step.dependOn(&install_lib.step);
-    } else {
-        compile.linkSystemLibrary("openal");
+            const install_lib = installSharedLibWindows(b, vcpkg_bin_path, lib_name);
+            compile.step.dependOn(&install_lib.step);
+        },
+        .macos => {
+            compile.addIncludePath(.{ .path = "/opt/homebrew/opt/openal-soft/include" });
+            compile.addLibraryPath(.{ .path = "/opt/homebrew/opt/openal-soft/lib" });
+            compile.linkSystemLibrary("openal");
+        },
+        else => {
+            compile.linkSystemLibrary("openal");
+        },
     }
 }
 
@@ -262,7 +278,39 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
     } else &.{};
 
     compile.addIncludePath(.{ .path = "external/glfw3webgpu" });
-    compile.addCSourceFile(.{ .file = .{ .path = "external/glfw3webgpu/glfw3webgpu.c" }, .flags = flags });
+
+    // Build using the system compiler for MacOS since it contains Objective C
+    if (target.result.os.tag == .macos) {
+        const cmake_build_folder = b.cache_root.join(b.allocator, &[_][]const u8{"glfw3webgpu"}) catch unreachable;
+
+        const cmake_configure = b.addSystemCommand(&[_][]const u8{
+            "cmake",
+            "-B",
+            cmake_build_folder,
+            "-S",
+            ".",
+        });
+
+        const cmake_build = b.addSystemCommand(&[_][]const u8{
+            "cmake",
+            "--build",
+            cmake_build_folder,
+        });
+        cmake_build.step.dependOn(&cmake_configure.step);
+        compile.step.dependOn(&cmake_build.step);
+
+        compile.linkFramework("Cocoa");
+        compile.linkFramework("CoreVideo");
+        compile.linkFramework("IOKit");
+        compile.linkFramework("QuartzCore");
+
+        compile.addRPath(.{ .path = "@executable_path" });
+
+        compile.addLibraryPath(.{ .path = b.pathJoin(&[_][]const u8{ cmake_build_folder, "glfw3webgpu" }) });
+        compile.linkSystemLibrary("glfw3webgpu");
+    } else {
+        compile.addCSourceFile(.{ .file = .{ .path = "external/glfw3webgpu/glfw3webgpu.c" }, .flags = flags });
+    }
 
     if (target.result.os.tag != .emscripten) {
         const wgpu_target = std.mem.concat(b.allocator, u8, &[_][]const u8{ switch (target.result.os.tag) {
@@ -290,8 +338,7 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
                 const install_lib = installSharedLibWindows(b, wgpu_bin_path, wgpu_name);
                 compile.step.dependOn(&install_lib.step);
             },
-            .macos => @panic("macos not supported"),
-            .linux => {
+            .macos, .linux => {
                 compile.linkSystemLibrary(wgpu_name);
             },
             else => unreachable,
