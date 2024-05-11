@@ -304,8 +304,6 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         compile.linkFramework("IOKit");
         compile.linkFramework("QuartzCore");
 
-        compile.addRPath(.{ .path = "@executable_path" });
-
         compile.addLibraryPath(.{ .path = b.pathJoin(&[_][]const u8{ cmake_build_folder, "glfw3webgpu" }) });
         compile.linkSystemLibrary("glfw3webgpu");
     } else {
