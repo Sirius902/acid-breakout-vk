@@ -317,7 +317,7 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
             .linux => "linux",
             else => |tag| std.debug.panic("Unsupported os: {}", .{tag}),
         }, "-", switch (target.result.cpu.arch) {
-            .arm, .aarch64, .aarch64_be, .aarch64_32 => "arm64",
+            .arm, .aarch64, .aarch64_be, .aarch64_32 => "aarch64",
             .x86 => "i686",
             .x86_64 => "x86_64",
             else => |arch| std.debug.panic("Unsupported cpu arch: {}", .{arch}),

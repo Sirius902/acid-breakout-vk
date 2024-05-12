@@ -16,9 +16,8 @@ surface: c.WGPUSurface,
 device: c.WGPUDevice,
 error_logger: *ErrorLogger,
 queue: c.WGPUQueue,
-swapchain_format: c.WGPUTextureFormat,
-swapchain_extent: Extent2D,
-swapchain: c.WGPUSwapChain,
+surface_format: c.WGPUTextureFormat,
+surface_extent: Extent2D,
 pipelines: Pipelines,
 buffers: Buffers,
 uniform_bind_group: c.WGPUBindGroup,
@@ -87,13 +86,12 @@ pub fn init(
     const queue = c.wgpuDeviceGetQueue(device);
     errdefer c.wgpuQueueRelease(queue);
 
-    const swapchain_format = c.wgpuSurfaceGetPreferredFormat(surface, adapter);
+    const surface_format = c.wgpuSurfaceGetPreferredFormat(surface, adapter);
+    const surface_extent = getSurfaceExtent(window);
 
-    const swapchain_extent = getSurfaceExtent(window);
-    const swapchain = recreateSwapchain(device, surface, swapchain_extent, swapchain_format, wait_for_vsync);
-    errdefer c.wgpuSwapChainRelease(swapchain);
+    configureSurface(device, surface, surface_extent, surface_format, wait_for_vsync);
 
-    const pipelines = try Pipelines.init(device, swapchain_format);
+    const pipelines = try Pipelines.init(device, surface_format);
     errdefer pipelines.deinit();
 
     const buffers = Buffers.init(device, queue);
@@ -114,13 +112,13 @@ pub fn init(
     errdefer c.wgpuBindGroupRelease(uniform_bind_group);
 
     // TODO: Fix pipeline alpha blending to be the same on lRGB and sRGB in both WebGPU and Vulkan backends.
-    const srgb_to_lrgb_pass = if (isSrgb(swapchain_format)) SrgbToLrgbPass.init(device, swapchain_extent, swapchain_format) else null;
+    const srgb_to_lrgb_pass = if (isSrgb(surface_format)) SrgbToLrgbPass.init(device, surface_extent, surface_format) else null;
     errdefer if (srgb_to_lrgb_pass) |*p| p.deinit();
 
-    const imgui_rt_format: c.WGPUTextureFormat = if (isSrgb(swapchain_format))
+    const imgui_rt_format: c.WGPUTextureFormat = if (isSrgb(surface_format))
         c.WGPUTextureFormat_BGRA8Unorm
     else
-        swapchain_format;
+        surface_format;
 
     if (!c.ImGui_ImplGlfw_InitForOther(window, true)) return error.ImGuiGlfwInit;
     if (!c.ImGui_ImplWGPU_Init(device, 1, imgui_rt_format, c.WGPUTextureFormat_Undefined)) return error.ImGuiWGPUInit;
@@ -134,9 +132,8 @@ pub fn init(
         .device = device,
         .error_logger = error_logger,
         .queue = queue,
-        .swapchain_format = swapchain_format,
-        .swapchain_extent = swapchain_extent,
-        .swapchain = swapchain,
+        .surface_format = surface_format,
+        .surface_extent = surface_extent,
         .pipelines = pipelines,
         .buffers = buffers,
         .uniform_bind_group = uniform_bind_group,
@@ -152,7 +149,6 @@ pub fn deinit(self: *Self) void {
     c.wgpuBindGroupRelease(self.uniform_bind_group);
     self.buffers.deinit();
     self.pipelines.deinit();
-    c.wgpuSwapChainRelease(self.swapchain);
     self.error_logger.deinit();
     c.wgpuQueueRelease(self.queue);
     c.wgpuDeviceRelease(self.device);
@@ -162,21 +158,13 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !void {
-    const current_swapchain_extent = getSurfaceExtent(self.window);
-    if (self.is_graphics_outdated or !self.swapchain_extent.eql(current_swapchain_extent)) {
-        const old_swapchain = self.swapchain;
-        self.swapchain = recreateSwapchain(
-            self.device,
-            self.surface,
-            current_swapchain_extent,
-            self.swapchain_format,
-            self.wait_for_vsync,
-        );
-        self.swapchain_extent = current_swapchain_extent;
-        c.wgpuSwapChainRelease(old_swapchain);
+    const current_surface_extent = getSurfaceExtent(self.window);
+    if (self.is_graphics_outdated or !self.surface_extent.eql(current_surface_extent)) {
+        self.surface_extent = current_surface_extent;
+        configureSurface(self.device, self.surface, self.surface_extent, self.surface_format, self.wait_for_vsync);
 
         if (self.srgb_to_lrgb_pass) |*cc_pass| {
-            cc_pass.resize(self.device, self.swapchain_extent);
+            cc_pass.resize(self.device, self.surface_extent);
         }
 
         self.is_graphics_outdated = false;
@@ -186,10 +174,20 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
     const encoder = c.wgpuDeviceCreateCommandEncoder(self.device, &encoder_desc);
     defer c.wgpuCommandEncoderRelease(encoder);
 
-    const next_texture = c.wgpuSwapChainGetCurrentTextureView(self.swapchain) orelse {
-        log.err("Failed to acquire next swap chain texture", .{});
-        return error.SwapchainTextureAcquire;
+    var surface_texture: c.WGPUSurfaceTexture = undefined;
+    c.wgpuSurfaceGetCurrentTexture(self.surface, &surface_texture);
+
+    const next_texture_desc: c.WGPUTextureViewDescriptor = .{
+        .label = "Surface Texture View",
+        .format = self.surface_format,
+        .dimension = c.WGPUTextureViewDimension_2D,
+        .mipLevelCount = 1,
+        .baseMipLevel = 0,
+        .arrayLayerCount = 1,
+        .baseArrayLayer = 0,
+        .aspect = c.WGPUTextureAspect_All,
     };
+    const next_texture = c.wgpuTextureCreateView(surface_texture.texture, &next_texture_desc);
     defer c.wgpuTextureViewRelease(next_texture);
 
     if (self.srgb_to_lrgb_pass) |*cc_pass| {
@@ -232,7 +230,7 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
     const game_size = math.vec2Cast(f32, game.size);
     const view = zlm.Mat4.createOrthogonal(0, game_size.x, 0, game_size.y, 0, 1);
 
-    const viewport = zlm.vec2(@floatFromInt(self.swapchain_extent.width), @floatFromInt(self.swapchain_extent.height));
+    const viewport = zlm.vec2(@floatFromInt(self.surface_extent.width), @floatFromInt(self.surface_extent.height));
     const aspect_ratio = (viewport.x / game_size.x) / (viewport.y / game_size.y);
     const aspect = if (viewport.x >= viewport.y)
         zlm.vec2(1.0 / aspect_ratio, 1)
@@ -244,7 +242,7 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
         .aspect = aspect,
         .viewport_size = viewport,
         .time = game.time,
-        .color_correction = if (isSrgb(self.swapchain_format)) 0 else 1,
+        .color_correction = if (isSrgb(self.surface_format)) 0 else 1,
     };
 
     self.buffers.update(self.device, self.queue, &ubo, draw_list);
@@ -313,7 +311,7 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
 
     c.wgpuQueueSubmit(self.queue, 1, &cmdbuf);
 
-    c.wgpuSwapChainPresent(self.swapchain);
+    c.wgpuSurfacePresent(self.surface);
 }
 
 pub fn igImplNewFrame() void {
@@ -376,22 +374,22 @@ fn getSurfaceExtent(window: *c.GLFWwindow) Extent2D {
     return .{ .width = @intCast(fw), .height = @intCast(fh) };
 }
 
-fn recreateSwapchain(
+fn configureSurface(
     device: c.WGPUDevice,
     surface: c.WGPUSurface,
-    swapchain_extent: Extent2D,
-    swapchain_format: c.WGPUTextureFormat,
+    surface_extent: Extent2D,
+    surface_format: c.WGPUTextureFormat,
     wait_for_vsync: bool,
-) c.WGPUSwapChain {
-    var swapchain_desc: c.WGPUSwapChainDescriptor = .{
-        .label = "Main Swapchain",
-        .width = swapchain_extent.width,
-        .height = swapchain_extent.height,
-        .format = swapchain_format,
+) void {
+    const surface_config: c.WGPUSurfaceConfiguration = .{
+        .device = device,
+        .width = surface_extent.width,
+        .height = surface_extent.height,
+        .format = surface_format,
         .usage = c.WGPUTextureUsage_RenderAttachment,
         .presentMode = if (wait_for_vsync) c.WGPUPresentMode_Fifo else c.WGPUPresentMode_Mailbox,
     };
-    return c.wgpuDeviceCreateSwapChain(device, surface, &swapchain_desc);
+    return c.wgpuSurfaceConfigure(surface, &surface_config);
 }
 
 const Mask = struct {
@@ -509,8 +507,8 @@ const SrgbToLrgbPass = struct {
     bind_group: c.WGPUBindGroup,
     pipeline: c.WGPURenderPipeline,
 
-    pub fn init(device: c.WGPUDevice, swapchain_extent: Extent2D, swapchain_format: c.WGPUTextureFormat) SrgbToLrgbPass {
-        const texture = createTexture(device, swapchain_extent);
+    pub fn init(device: c.WGPUDevice, surface_extent: Extent2D, surface_format: c.WGPUTextureFormat) SrgbToLrgbPass {
+        const texture = createTexture(device, surface_extent);
         errdefer c.wgpuTextureRelease(texture);
 
         const texture_view = c.wgpuTextureCreateView(texture, &.{
@@ -580,7 +578,7 @@ const SrgbToLrgbPass = struct {
         });
         errdefer c.wgpuBindGroupRelease(bind_group);
 
-        const pipeline = createPipeline(device, swapchain_format, bind_group_layout);
+        const pipeline = createPipeline(device, surface_format, bind_group_layout);
         errdefer c.wgpuRenderPipelineRelease(pipeline);
 
         return .{
@@ -602,10 +600,10 @@ const SrgbToLrgbPass = struct {
         c.wgpuTextureRelease(self.texture);
     }
 
-    pub fn resize(self: *SrgbToLrgbPass, device: c.WGPUDevice, swapchain_extent: Extent2D) void {
+    pub fn resize(self: *SrgbToLrgbPass, device: c.WGPUDevice, surface_extent: Extent2D) void {
         const old_texture = self.texture;
         const old_view = self.texture_view;
-        self.texture = createTexture(device, swapchain_extent);
+        self.texture = createTexture(device, surface_extent);
         self.texture_view = c.wgpuTextureCreateView(self.texture, &.{
             .label = "sRGB to lRGB View",
             .format = c.WGPUTextureFormat_BGRA8Unorm,
@@ -639,12 +637,12 @@ const SrgbToLrgbPass = struct {
         c.wgpuBindGroupRelease(old_bind_group);
     }
 
-    fn createTexture(device: c.WGPUDevice, swapchain_extent: Extent2D) c.WGPUTexture {
+    fn createTexture(device: c.WGPUDevice, surface_extent: Extent2D) c.WGPUTexture {
         return c.wgpuDeviceCreateTexture(device, &.{
             .label = "sRGB to lRGB Texture",
             .size = .{
-                .width = swapchain_extent.width,
-                .height = swapchain_extent.height,
+                .width = surface_extent.width,
+                .height = surface_extent.height,
                 .depthOrArrayLayers = 1,
             },
             .format = c.WGPUTextureFormat_BGRA8Unorm,
@@ -655,7 +653,7 @@ const SrgbToLrgbPass = struct {
         });
     }
 
-    fn createPipeline(device: c.WGPUDevice, swapchain_format: c.WGPUTextureFormat, bind_group_layout: c.WGPUBindGroupLayout) c.WGPURenderPipeline {
+    fn createPipeline(device: c.WGPUDevice, surface_format: c.WGPUTextureFormat, bind_group_layout: c.WGPUBindGroupLayout) c.WGPURenderPipeline {
         const shader_code_desc: c.WGPUShaderModuleWGSLDescriptor = .{
             .code = srgb_to_lrgb_shader_source,
             .chain = .{ .sType = c.WGPUSType_ShaderModuleWGSLDescriptor },
@@ -682,7 +680,7 @@ const SrgbToLrgbPass = struct {
         };
 
         const color_target: c.WGPUColorTargetState = .{
-            .format = swapchain_format,
+            .format = surface_format,
             .blend = &blend_state,
             .writeMask = c.WGPUColorWriteMask_All,
         };
@@ -923,7 +921,7 @@ const Pipelines = struct {
     bind_group_layout: c.WGPUBindGroupLayout,
     mask_bind_group_layout: c.WGPUBindGroupLayout,
 
-    pub fn init(device: c.WGPUDevice, swapchain_format: c.WGPUTextureFormat) !Pipelines {
+    pub fn init(device: c.WGPUDevice, surface_format: c.WGPUTextureFormat) !Pipelines {
         const shader_code_desc: c.WGPUShaderModuleWGSLDescriptor = .{
             .code = shader_source,
             .chain = .{ .sType = c.WGPUSType_ShaderModuleWGSLDescriptor },
@@ -977,7 +975,7 @@ const Pipelines = struct {
             Vertex,
             Instance,
             device,
-            swapchain_format,
+            surface_format,
             &[_]c.WGPUBindGroupLayout{bind_group_layout},
             shader_module,
             "vs_triangle_main",
@@ -990,7 +988,7 @@ const Pipelines = struct {
             Vertex,
             Instance,
             device,
-            swapchain_format,
+            surface_format,
             &[_]c.WGPUBindGroupLayout{ bind_group_layout, mask_bind_group_layout },
             shader_module,
             "vs_triangle_main",
@@ -1003,7 +1001,7 @@ const Pipelines = struct {
             PointVertex,
             null,
             device,
-            swapchain_format,
+            surface_format,
             &[_]c.WGPUBindGroupLayout{bind_group_layout},
             shader_module,
             "vs_point_main",
@@ -1016,7 +1014,7 @@ const Pipelines = struct {
             PointVertex,
             null,
             device,
-            swapchain_format,
+            surface_format,
             &[_]c.WGPUBindGroupLayout{bind_group_layout},
             shader_module,
             "vs_point_main",
@@ -1050,7 +1048,7 @@ fn createRenderPipeline(
     comptime VertexType: type,
     comptime InstanceType: ?type,
     device: c.WGPUDevice,
-    swapchain_format: c.WGPUTextureFormat,
+    surface_format: c.WGPUTextureFormat,
     bind_group_layouts: []const c.WGPUBindGroupLayout,
     shader_module: c.WGPUShaderModule,
     vs_entrypoint: [*:0]const u8,
@@ -1071,7 +1069,7 @@ fn createRenderPipeline(
     };
 
     const color_target: c.WGPUColorTargetState = .{
-        .format = swapchain_format,
+        .format = surface_format,
         .blend = &blend_state,
         .writeMask = c.WGPUColorWriteMask_All,
     };
