@@ -3,6 +3,14 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.12.0",
     .dependencies = .{
+        .mach_glfw = .{
+            .url = "https://pkg.machengine.org/mach-glfw/8da44b719e345097664ff2e0a7620474eb11db5f.tar.gz",
+            .hash = "1220e5343c2fe2a490aa90dc52d92fd34ebfd7d0ffc7d246dd4720bb5c339ead4d7b",
+        },
+        .mach_gpu = .{
+            .url = "https://pkg.machengine.org/mach-gpu/4743eb5b485d97afdc0be8ad111aa1a3e5a884d8.tar.gz",
+            .hash = "12201c2574aa3edf9048dfbd5ec16de15a8345e9f27066e1d56e3e2ba35d32cba584",
+        },
         .vulkan_zig = .{
             .url = "https://github.com/Snektron/vulkan-zig/archive/a44d86899b5d8e5656c8e80695d1d9f4886540a2.tar.gz",
             .hash = "12209449a4ffca1976eeeb1b6d5ff04ee688011a6842c79ca78a2de3c12ac7060dc9",

@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const vk = @import("vulkan");
 const shaders = @import("shaders");
+const glfw = @import("mach-glfw");
 const c = @import("../../c.zig");
 const Allocator = std.mem.Allocator;
 
@@ -50,7 +51,7 @@ pub const GraphicsContext = struct {
 
     debug_messenger: ?vk.DebugUtilsMessengerEXT,
 
-    pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *c.GLFWwindow) !*GraphicsContext {
+    pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *glfw.Window) !*GraphicsContext {
         var self: *GraphicsContext = try allocator.create(GraphicsContext);
         errdefer allocator.destroy(self);
 

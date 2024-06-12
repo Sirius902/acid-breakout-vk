@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const options = @import("options");
 const c = @import("c.zig");
+const glfw = @import("mach-glfw");
 const zlm = @import("zlm");
 const assets = @import("assets");
 const math = @import("math.zig");
@@ -52,10 +53,10 @@ pub fn main() !void {
         break :blk .{};
     };
 
-    if (c.glfwInit() != c.GLFW_TRUE) return error.GlfwInitFailed;
-    defer c.glfwTerminate();
+    if (!glfw.init(.{})) return error.GlfwInitFailed;
+    defer glfw.terminate();
 
-    _ = c.glfwSetErrorCallback(glfwErrorCallback);
+    glfw.setErrorCallback(glfwErrorCallback);
 
     const initial_width = 800;
     const initial_height = 600;
@@ -63,19 +64,14 @@ pub fn main() !void {
     // Synchronization is not required to access inputs on the thread that polls GLFW events.
     var input = InputContext.init();
 
-    c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
-    const window = c.glfwCreateWindow(
-        initial_width,
-        initial_height,
-        app_name,
-        null,
-        null,
-    ) orelse return error.WindowInitFailed;
-    defer c.glfwDestroyWindow(window);
+    const window = glfw.Window.create(initial_width, initial_height, app_name, null, null, .{
+        .client_api = .no_api,
+    }) orelse return error.WindowInitFailed;
+    defer window.destroy();
 
-    _ = c.glfwSetWindowUserPointer(window, &input);
-    _ = c.glfwSetCursorPosCallback(window, glfwCursorPosCallback);
-    _ = c.glfwSetKeyCallback(window, glfwKeyCallback);
+    window.setUserPointer(&input);
+    window.setCursorPosCallback(glfwCursorPosCallback);
+    window.setKeyCallback(glfwKeyCallback);
 
     const imgui_ini_name = "imgui.ini";
     const imgui_ini_path = if (exe_dir_path) |path|
@@ -111,29 +107,25 @@ pub fn main() !void {
     defer draw_list.deinit();
 
     var frame_timer = std.time.Timer.start() catch @panic("Expected timer to be supported");
-    while (c.glfwWindowShouldClose(window) == c.GLFW_FALSE) {
+    while (!window.shouldClose()) {
         if (builtin.target.os.tag == .emscripten) {
             // TODO: Use emscripten_request_animation_frame_loop.
             const em = @cImport(@cInclude("emscripten.h"));
             em.emscripten_sleep(16);
         }
 
-        var ww: c_int = undefined;
-        var wh: c_int = undefined;
-        c.glfwGetWindowSize(window, &ww, &wh);
-        const window_size = vec2(@floatFromInt(ww), @floatFromInt(wh));
+        const size = window.getSize();
+        const window_size = vec2(@floatFromInt(size.width), @floatFromInt(size.height));
 
         // TODO: Figure out what else needs to be done to work properly on high DPI displays.
-        var fw: c_int = undefined;
-        var fh: c_int = undefined;
-        c.glfwGetFramebufferSize(window, &fw, &fh);
+        const frame_size = window.getFramebufferSize();
 
         // Scale mouse position to correspond to game units within the aspected viewport.
         const mouse_pos = if (input.mouseState().pos) |p| blk: {
             const game_size = math.vec2Cast(f32, game.size);
             const unit_pos = p.div(window_size).mul(vec2(1, -1)).add(vec2(0, 1)).sub(zlm.Vec2.one.scale(0.5));
             const aspect_ratio = (window_size.x / game_size.x) / (window_size.y / game_size.y);
-            const scaled_pos = if (ww >= wh)
+            const scaled_pos = if (size.width >= size.height)
                 unit_pos.mul(vec2(game_size.x * aspect_ratio, game_size.y))
             else
                 unit_pos.mul(vec2(game_size.x, game_size.y / aspect_ratio));
@@ -148,8 +140,8 @@ pub fn main() !void {
         }
 
         // Don't present or resize swapchain while the window is minimized.
-        if (fw == 0 or fh == 0) {
-            c.glfwPollEvents();
+        if (frame_size.width == 0 or frame_size.height == 0) {
+            glfw.pollEvents();
             continue;
         }
 
@@ -165,7 +157,7 @@ pub fn main() !void {
             try ac.tickAudio();
         }
 
-        c.glfwPollEvents();
+        glfw.pollEvents();
     }
 }
 
@@ -223,34 +215,33 @@ const Config = struct {
     }
 };
 
-fn glfwErrorCallback(error_code: c_int, description: [*c]const u8) callconv(.C) void {
+fn glfwErrorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
     std.log.err("GLFW error {}: {s}", .{ error_code, description });
 }
 
-fn glfwCursorPosCallback(window: ?*c.GLFWwindow, x: f64, y: f64) callconv(.C) void {
-    const input: *InputContext = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window).?));
+fn glfwCursorPosCallback(window: glfw.Window, x: f64, y: f64) void {
+    const input = window.getUserPointer(InputContext).?;
     input.updateMouse(vec2(@floatCast(x), @floatCast(y)));
 }
 
-fn glfwKeyCallback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
+fn glfwKeyCallback(window: glfw.Window, key: glfw.Key, scancode: i32, action: glfw.Action, mods: glfw.Mods) void {
     _ = scancode;
     _ = mods;
 
     const input_key: ?InputContext.Key = switch (key) {
-        c.GLFW_KEY_F1 => .f1,
-        c.GLFW_KEY_ESCAPE => .escape,
+        .F1 => .f1,
+        .escape => .escape,
         else => null,
     };
 
     if (input_key) |k| {
         const input_state: InputContext.KeyState = switch (action) {
-            c.GLFW_PRESS => .press,
-            c.GLFW_RELEASE => .release,
-            c.GLFW_REPEAT => .repeat,
-            else => std.debug.panic("Unexpected GLFW key action: {}", .{action}),
+            .press => .press,
+            .release => .release,
+            .repeat => .repeat,
         };
 
-        const input: *InputContext = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window).?));
+        const input = window.getUserPointer(InputContext).?;
         input.updateKey(k, input_state);
     }
 }
@@ -288,7 +279,7 @@ fn igFrame(
     gfx: *GraphicsBackend,
     config: *Config,
     game: *Game,
-    window: *c.GLFWwindow,
+    window: glfw.Window,
     exe_dir: ?*std.fs.Dir,
 ) !void {
     const state = struct {
@@ -300,9 +291,7 @@ fn igFrame(
     c.ImGui_ImplGlfw_NewFrame();
     c.igNewFrame();
 
-    var fw: c_int = undefined;
-    var fh: c_int = undefined;
-    c.glfwGetFramebufferSize(window, &fw, &fh);
+    const frame_size = window.getFramebufferSize();
 
     var is_save_config = false;
 
@@ -383,7 +372,7 @@ fn igFrame(
             }
 
             if (c.igButton("Reset Game", .{ .x = 0, .y = 0 })) {
-                game.reset(vec2u(@intCast(fw), @intCast(fh)));
+                game.reset(vec2u(frame_size.width, frame_size.height));
             }
 
             if (c.igCheckbox("Wait for VSync", &config.wait_for_vsync)) {

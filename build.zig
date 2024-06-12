@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
             "include",
         }) });
 
-        linkLibraries(b, exe_lib, target, graphics);
+        linkLibraries(b, exe_lib, target, optimize, graphics);
 
         const emcc_path = b.pathJoin(&[_][]const u8{ emscripten_root, "emcc" ++ if (builtin.os.tag == .windows) ".bat" else "" });
 
@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
         const exe = b.addExecutable(options);
         b.installArtifact(exe);
 
-        linkLibraries(b, exe, target, graphics);
+        linkLibraries(b, exe, target, optimize, graphics);
 
         const run_cmd = b.addRunArtifact(exe);
 
@@ -94,6 +94,7 @@ fn linkLibraries(
     b: *std.Build,
     compile: *std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
     graphics: GraphicsBackend,
 ) void {
     const zlm = b.dependency("zlm", .{});
@@ -108,6 +109,11 @@ fn linkLibraries(
     compile.linkLibCpp();
 
     if (target.result.os.tag != .emscripten) {
+        compile.root_module.addImport("mach-glfw", b.dependency("mach_glfw", .{
+            .target = target,
+            .optimize = optimize,
+        }).module("mach-glfw"));
+
         linkGlfw(b, compile, target);
         linkOpenAl(b, compile, target);
     }
@@ -119,7 +125,14 @@ fn linkLibraries(
             linkVulkan(b, compile, target);
             linkVulkanShaders(b, compile);
         },
-        .wgpu => linkWgpu(b, compile, target),
+        .wgpu => {
+            compile.root_module.addImport("mach-gpu", b.dependency("mach_gpu", .{
+                .target = target,
+                .optimize = optimize,
+            }).module("mach-gpu"));
+
+            linkWgpu(b, compile, target);
+        },
     }
 
     linkImGui(b, compile, target, graphics);

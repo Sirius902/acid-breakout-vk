@@ -3,6 +3,7 @@ const shaders = @import("shaders");
 const vk = @import("vulkan");
 const c = @import("../../c.zig");
 const math = @import("../../math.zig");
+const glfw = @import("mach-glfw");
 const zlm = @import("zlm");
 const Game = @import("../../game/game.zig").Game;
 const Buffer = @import("buffer.zig").Buffer;
@@ -20,7 +21,7 @@ const rect_verts = @import("../graphics.zig").rect_verts;
 const rect_indices = @import("../graphics.zig").rect_indices;
 
 allocator: Allocator,
-window: *c.GLFWwindow,
+window: glfw.Window,
 gc: *GraphicsContext,
 ic: ImGuiContext,
 swapchain: Swapchain,
@@ -52,20 +53,17 @@ const MaskPool = MemoryPoolExtra(std.DoublyLinkedList(MaskNode).Node, .{ .growab
 
 pub fn init(
     allocator: Allocator,
-    window: *c.GLFWwindow,
+    window: glfw.Window,
     app_name: [*:0]const u8,
     wait_for_vsync: bool,
 ) !Self {
-    if (c.glfwVulkanSupported() != c.GLFW_TRUE) {
+    if (!glfw.vulkanSupported()) {
         log.err("GLFW could not find libvulkan", .{});
         return error.NoVulkan;
     }
 
-    var fw: c_int = undefined;
-    var fh: c_int = undefined;
-    c.glfwGetFramebufferSize(window, &fw, &fh);
-
-    const extent = vk.Extent2D{ .width = @intCast(fw), .height = @intCast(fh) };
+    const frame_size = window.getFramebufferSize();
+    const extent = vk.Extent2D{ .width = frame_size.width, .height = frame_size.height };
 
     const gc = try GraphicsContext.init(allocator, app_name, window);
     errdefer gc.deinit();
@@ -400,13 +398,11 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
         else => |narrow| return narrow,
     };
 
-    var fw: c_int = undefined;
-    var fh: c_int = undefined;
-    c.glfwGetFramebufferSize(self.window, &fw, &fh);
+    const frame_size = self.window.getFramebufferSize();
 
-    if (state == .suboptimal or self.extent.width != @as(u32, @intCast(fw)) or self.extent.height != @as(u32, @intCast(fh)) or self.is_graphics_outdated) {
-        self.extent.width = @intCast(fw);
-        self.extent.height = @intCast(fh);
+    if (state == .suboptimal or self.extent.width != frame_size.width or self.extent.height != frame_size.height or self.is_graphics_outdated) {
+        self.extent.width = frame_size.width;
+        self.extent.height = frame_size.height;
         try self.swapchain.recreate(self.extent, self.wait_for_vsync);
 
         destroyFramebuffers(self.gc, self.allocator, self.framebuffers);

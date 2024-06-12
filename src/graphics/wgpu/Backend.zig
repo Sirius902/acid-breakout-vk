@@ -1,4 +1,5 @@
 const std = @import("std");
+const glfw = @import("mach-glfw");
 const zlm = @import("zlm");
 const c = @import("../../c.zig");
 const math = @import("../../math.zig");
@@ -22,7 +23,7 @@ pipelines: Pipelines,
 buffers: Buffers,
 uniform_bind_group: c.WGPUBindGroup,
 srgb_to_lrgb_pass: ?SrgbToLrgbPass,
-window: *c.GLFWwindow,
+window: glfw.Window,
 wait_for_vsync: bool,
 is_graphics_outdated: bool = false,
 
@@ -54,7 +55,7 @@ const UniformBufferObject = extern struct {
 
 pub fn init(
     allocator: Allocator,
-    window: *c.GLFWwindow,
+    window: glfw.Window,
     app_name: [*:0]const u8,
     wait_for_vsync: bool,
 ) !Self {
@@ -68,7 +69,7 @@ pub fn init(
     const adapter = requestAdapter(instance, &options);
     errdefer c.wgpuAdapterRelease(adapter);
 
-    const surface = c.glfwGetWGPUSurface(instance, window);
+    const surface = c.glfwGetWGPUSurface(instance, @ptrCast(window.handle));
     errdefer c.wgpuSurfaceRelease(surface);
 
     const device_desc: c.WGPUDeviceDescriptor = .{
@@ -120,7 +121,7 @@ pub fn init(
     else
         surface_format;
 
-    if (!c.ImGui_ImplGlfw_InitForOther(window, true)) return error.ImGuiGlfwInit;
+    if (!c.ImGui_ImplGlfw_InitForOther(@ptrCast(window.handle), true)) return error.ImGuiGlfwInit;
     if (!c.ImGui_ImplWGPU_Init(device, 1, imgui_rt_format, c.WGPUTextureFormat_Undefined)) return error.ImGuiWGPUInit;
     errdefer c.ImGui_ImplWGPU_Shutdown();
 
@@ -366,12 +367,9 @@ fn requestDevice(adapter: c.WGPUAdapter, descriptor: *const c.WGPUDeviceDescript
     return device_data.device;
 }
 
-fn getSurfaceExtent(window: *c.GLFWwindow) Extent2D {
-    var fw: c_int = undefined;
-    var fh: c_int = undefined;
-    c.glfwGetFramebufferSize(window, &fw, &fh);
-
-    return .{ .width = @intCast(fw), .height = @intCast(fh) };
+fn getSurfaceExtent(window: glfw.Window) Extent2D {
+    const frame_size = window.getFramebufferSize();
+    return .{ .width = frame_size.width, .height = frame_size.height };
 }
 
 fn configureSurface(
