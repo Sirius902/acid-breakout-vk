@@ -1,19 +1,19 @@
 .{
     .name = "acid-breakout-vk",
     .version = "0.0.0",
-    .minimum_zig_version = "0.11.0",
+    .minimum_zig_version = "0.12.0",
     .dependencies = .{
         .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/aa3808940ef2cd1789965304863dd6debec1a99f.tar.gz",
-            .hash = "1220d51ef5c80e63c8af8394d7a6562c12045847b6676da941e3fd00315242cbff11",
+            .url = "https://github.com/Snektron/vulkan-zig/archive/a44d86899b5d8e5656c8e80695d1d9f4886540a2.tar.gz",
+            .hash = "12209449a4ffca1976eeeb1b6d5ff04ee688011a6842c79ca78a2de3c12ac7060dc9",
         },
         .zlm = .{
-            .url = "https://github.com/ziglibs/zlm/archive/b0a06cf8c7173af88d710f25bb1f8fa77972689a.tar.gz",
-            .hash = "1220add113da7e335228cfc469bc907879df9f6d707ae5ff2c8ac6997bf2d58d931c",
+            .url = "https://github.com/Sirius902/zlm/archive/a8ed03e28e6507c4f4a8643824a68586bf92ae4c.tar.gz",
+            .hash = "1220342ac333965de915f74a8425e4848ffe46852da0e4789103f9ec650c3cd22456",
         },
         .zwav = .{
-            .url = "https://github.com/Sirius902/zwav/archive/c670be405c927afa4aeabcf1f6bdd0eeade0691f.tar.gz",
-            .hash = "12203e1b0a428e2ef379802e9f9b7676098f0e0784efa57c0e0c81b4c39b0bda2187",
+            .url = "https://github.com/Sirius902/zwav/archive/fb46b037910000763c64265e1995048d8f89eb56.tar.gz",
+            .hash = "1220ffefb81ad1204625751e1648a51d661c895020c741c956a6687a32bc11a67431",
         },
     },
     .paths = .{

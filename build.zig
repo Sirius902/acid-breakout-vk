@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
 
     const options = .{
         .name = "acid-breakout",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     };
@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
         const exe_lib = b.addStaticLibrary(options);
         b.installArtifact(exe_lib);
 
-        exe_lib.addSystemIncludePath(.{ .path = b.pathJoin(&[_][]const u8{
+        exe_lib.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&[_][]const u8{
             emscripten_root,
             "cache",
             "sysroot",
@@ -158,8 +158,8 @@ fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
 
             const lib_name = "glfw3";
 
-            compile.addIncludePath(.{ .path = vcpkg_include_path });
-            compile.addLibraryPath(.{ .path = vcpkg_lib_path });
+            compile.addIncludePath(.{ .cwd_relative = vcpkg_include_path });
+            compile.addLibraryPath(.{ .cwd_relative = vcpkg_lib_path });
             compile.linkSystemLibrary(lib_name ++ "dll");
 
             const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
@@ -168,8 +168,8 @@ fn linkGlfw(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
             compile.step.dependOn(&install_lib.step);
         },
         .macos => {
-            compile.addIncludePath(.{ .path = "/opt/homebrew/opt/glfw/include" });
-            compile.addLibraryPath(.{ .path = "/opt/homebrew/opt/glfw/lib" });
+            compile.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/glfw/include" });
+            compile.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/glfw/lib" });
             compile.linkSystemLibrary("glfw");
         },
         else => {
@@ -205,8 +205,8 @@ fn linkOpenAl(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build
 
             const lib_name = "OpenAL32";
 
-            compile.addIncludePath(.{ .path = vcpkg_include_path });
-            compile.addLibraryPath(.{ .path = vcpkg_lib_path });
+            compile.addIncludePath(.{ .cwd_relative = vcpkg_include_path });
+            compile.addLibraryPath(.{ .cwd_relative = vcpkg_lib_path });
             compile.linkSystemLibrary(lib_name);
 
             const vcpkg_bin_path = b.pathJoin(&[_][]const u8{ vcpkg_installed_arch_path, "bin" });
@@ -215,8 +215,8 @@ fn linkOpenAl(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build
             compile.step.dependOn(&install_lib.step);
         },
         .macos => {
-            compile.addIncludePath(.{ .path = "/opt/homebrew/opt/openal-soft/include" });
-            compile.addLibraryPath(.{ .path = "/opt/homebrew/opt/openal-soft/lib" });
+            compile.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/openal-soft/include" });
+            compile.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/openal-soft/lib" });
             compile.linkSystemLibrary("openal");
         },
         else => {
@@ -277,7 +277,7 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
             &.{};
     } else &.{};
 
-    compile.addIncludePath(.{ .path = "external/glfw3webgpu" });
+    compile.addIncludePath(b.path("external/glfw3webgpu"));
 
     // Build using the system compiler for MacOS since it contains Objective C
     if (target.result.os.tag == .macos) {
@@ -304,10 +304,10 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         compile.linkFramework("IOKit");
         compile.linkFramework("QuartzCore");
 
-        compile.addLibraryPath(.{ .path = b.pathJoin(&[_][]const u8{ cmake_build_folder, "glfw3webgpu" }) });
+        compile.addLibraryPath(.{ .cwd_relative = b.pathJoin(&[_][]const u8{ cmake_build_folder, "glfw3webgpu" }) });
         compile.linkSystemLibrary("glfw3webgpu");
     } else {
-        compile.addCSourceFile(.{ .file = .{ .path = "external/glfw3webgpu/glfw3webgpu.c" }, .flags = flags });
+        compile.addCSourceFile(.{ .file = b.path("external/glfw3webgpu/glfw3webgpu.c"), .flags = flags });
     }
 
     if (target.result.os.tag != .emscripten) {
@@ -326,8 +326,8 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         const wgpu_bin_path = b.pathJoin(&[_][]const u8{ "external/wgpu/bin", wgpu_target });
         const wgpu_name = "wgpu_native";
 
-        compile.addIncludePath(.{ .path = "external/wgpu/include" });
-        compile.addLibraryPath(.{ .path = wgpu_bin_path });
+        compile.addIncludePath(b.path("external/wgpu/include"));
+        compile.addLibraryPath(.{ .cwd_relative = wgpu_bin_path });
 
         switch (target.result.os.tag) {
             .windows => {
@@ -366,14 +366,14 @@ fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.
 
     for (cimgui_src) |src_file| {
         compile.addCSourceFile(.{
-            .file = .{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, src_file }) },
+            .file = b.path(b.pathJoin(&[_][]const u8{ cimgui_dir, src_file })),
             .flags = cxx_flags,
         });
     }
 
-    compile.addIncludePath(.{ .path = cimgui_dir });
-    compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "generator", "output" }) });
-    compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ cimgui_dir, "imgui" }) });
+    compile.addIncludePath(b.path(cimgui_dir));
+    compile.addIncludePath(b.path(b.pathJoin(&[_][]const u8{ cimgui_dir, "generator", "output" })));
+    compile.addIncludePath(b.path(b.pathJoin(&[_][]const u8{ cimgui_dir, "imgui" })));
 
     // Link system Vulkan lib for the ImGui Vulkan impl to use.
     if (graphics == .vulkan) {
@@ -390,8 +390,8 @@ fn linkImGui(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.
 
             const lib_dir_name = std.mem.concat(b.allocator, u8, &[_][]const u8{ "Lib", arch_suffix }) catch @panic("OOM");
 
-            compile.addIncludePath(.{ .path = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, "Include" }) });
-            compile.addLibraryPath(.{ .path = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, lib_dir_name }) });
+            compile.addIncludePath(.{ .cwd_relative = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, "Include" }) });
+            compile.addLibraryPath(.{ .cwd_relative = b.pathJoin(&[_][]const u8{ vulkan_sdk_root, lib_dir_name }) });
             compile.linkSystemLibrary("vulkan-1");
         } else {
             compile.linkSystemLibrary("vulkan");
@@ -406,13 +406,13 @@ fn installSharedLibWindows(b: *std.Build, src_dir: []const u8, lib_name: []const
     const pdb_name = b.fmt("{s}{s}", .{ lib_name, ".pdb" });
     const pdb_path = b.pathJoin(&[_][]const u8{ src_dir, pdb_name });
 
-    const install_dll = b.addInstallBinFile(.{ .path = dll_path }, dll_name);
+    const install_dll = b.addInstallBinFile(b.path(dll_path), dll_name);
 
     // Make sure pdb file exists before trying to install it
     if (std.fs.cwd().openFile(pdb_path, .{})) |pdb_file| {
         pdb_file.close();
 
-        const install_pdb = b.addInstallBinFile(.{ .path = pdb_path }, pdb_name);
+        const install_pdb = b.addInstallBinFile(b.path(pdb_path), pdb_name);
         install_dll.step.dependOn(&install_pdb.step);
     } else |_| {}
 

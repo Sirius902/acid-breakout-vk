@@ -48,21 +48,21 @@ pub fn create(owner: *std.Build) *Self {
 }
 
 pub fn getModule(self: *const Self) *std.Build.Module {
-    const asset_types = self.step.owner.createModule(.{ .root_source_file = .{ .path = "asset-gen/asset_types.zig" } });
+    const asset_types = self.step.owner.createModule(.{ .root_source_file = self.step.owner.path("asset-gen/asset_types.zig") });
     const module = self.step.owner.createModule(.{ .root_source_file = self.getSource() });
     module.addImport("asset_types", asset_types);
     return module;
 }
 
 pub fn getSource(self: *const Self) std.Build.LazyPath {
-    return .{ .generated = &self.generated_file };
+    return .{ .generated = .{ .file = &self.generated_file } };
 }
 
 pub fn addAsset(self: *Self, info: AssetInfo) void {
     self.assets.append(info) catch @panic("OOM");
 }
 
-pub fn make(step: *std.Build.Step, progress: *std.Progress.Node) !void {
+pub fn make(step: *std.Build.Step, progress: std.Progress.Node) !void {
     _ = progress;
     const self: *Self = @fieldParentPtr("step", step);
     const b = self.step.owner;
