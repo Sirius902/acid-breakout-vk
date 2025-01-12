@@ -263,7 +263,7 @@ fn linkVulkan(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build
 fn linkVulkanShaders(b: *std.Build, compile: *std.Build.Step.Compile) void {
     const shaders = vkgen.ShaderCompileStep.create(
         b,
-        &[_][]const u8{ "glslc", "--target-env=vulkan1.2" },
+        &[_][]const u8{ "glslang", "--target-env", "vulkan1.2" },
         "-o",
     );
 
