@@ -87,7 +87,10 @@ pub fn init(
     const queue = c.wgpuDeviceGetQueue(device);
     errdefer c.wgpuQueueRelease(queue);
 
-    const surface_format = c.wgpuSurfaceGetPreferredFormat(surface, adapter);
+    var surface_capabilities: c.WGPUSurfaceCapabilities = undefined;
+    c.wgpuSurfaceGetCapabilities(surface, adapter, &surface_capabilities);
+
+    const surface_format = surface_capabilities.formats[0];
     const surface_extent = getSurfaceExtent(window);
 
     configureSurface(device, surface, surface_extent, surface_format, wait_for_vsync);
@@ -229,7 +232,9 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
     const render_pass = c.wgpuCommandEncoderBeginRenderPass(encoder, &render_pass_desc);
 
     const game_size = math.vec2Cast(f32, game.size);
-    const view = zlm.Mat4.createOrthogonal(0, game_size.x, 0, game_size.y, 0, 1);
+    // NOTE(Sirius902) Near to far needs to be 1 and -1 so that the math works out to mapping depth
+    // to [0,1] as that is the clip range for Z in WebGPU.
+    const view = zlm.Mat4.createOrthogonal(0, game_size.x, 0, game_size.y, 1, -1);
 
     const viewport = zlm.vec2(@floatFromInt(self.surface_extent.width), @floatFromInt(self.surface_extent.height));
     const aspect_ratio = (viewport.x / game_size.x) / (viewport.y / game_size.y);
@@ -1135,7 +1140,10 @@ const ErrorLogger = struct {
     }
 
     pub fn logUncapturedDeviceError(self: *@This(), device: c.WGPUDevice) void {
-        c.wgpuDeviceSetUncapturedErrorCallback(device, onDeviceError, self);
+        _ = self;
+        _ = device;
+        // TODO(Sirius902) How to call this with nix wgpu-native?
+        // c.wgpuDeviceSetUncapturedErrorCallback(device, onDeviceError, self);
     }
 
     pub fn logQueueWorkDone(self: *@This(), queue: c.WGPUQueue) void {

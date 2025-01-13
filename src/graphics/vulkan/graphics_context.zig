@@ -51,7 +51,7 @@ pub const GraphicsContext = struct {
 
     debug_messenger: ?vk.DebugUtilsMessengerEXT,
 
-    pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *glfw.Window) !*GraphicsContext {
+    pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *c.GLFWwindow) !*GraphicsContext {
         var self: *GraphicsContext = try allocator.create(GraphicsContext);
         errdefer allocator.destroy(self);
 

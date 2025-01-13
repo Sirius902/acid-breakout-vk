@@ -12,15 +12,15 @@
             .hash = "12201c2574aa3edf9048dfbd5ec16de15a8345e9f27066e1d56e3e2ba35d32cba584",
         },
         .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/a44d86899b5d8e5656c8e80695d1d9f4886540a2.tar.gz",
+            .url = "git+https://github.com/Snektron/vulkan-zig#a44d86899b5d8e5656c8e80695d1d9f4886540a2",
             .hash = "12209449a4ffca1976eeeb1b6d5ff04ee688011a6842c79ca78a2de3c12ac7060dc9",
         },
         .zlm = .{
-            .url = "https://github.com/Sirius902/zlm/archive/a8ed03e28e6507c4f4a8643824a68586bf92ae4c.tar.gz",
+            .url = "git+https://github.com/ziglibs/zlm#35b76fae19f9d0a1ed541db621d7c4b3e266087e",
             .hash = "1220342ac333965de915f74a8425e4848ffe46852da0e4789103f9ec650c3cd22456",
         },
         .zwav = .{
-            .url = "https://github.com/Sirius902/zwav/archive/fb46b037910000763c64265e1995048d8f89eb56.tar.gz",
+            .url = "git+https://github.com/Sirius902/zwav#fb46b037910000763c64265e1995048d8f89eb56",
             .hash = "1220ffefb81ad1204625751e1648a51d661c895020c741c956a6687a32bc11a67431",
         },
     },

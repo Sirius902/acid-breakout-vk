@@ -285,7 +285,9 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         };
 
         break :blk if (std.mem.eql(u8, session_type, "wayland"))
-            &.{"-D_GLFW_WAYLAND"}
+            // TODO(Sirius902) glfw seems to be having problems with wayland.
+            &.{}
+            // &.{"-D_GLFW_WAYLAND"}
         else
             &.{};
     } else &.{};
@@ -339,8 +341,12 @@ fn linkWgpu(b: *std.Build, compile: *std.Build.Step.Compile, target: std.Build.R
         const wgpu_bin_path = b.pathJoin(&[_][]const u8{ "external/wgpu/bin", wgpu_target });
         const wgpu_name = "wgpu_native";
 
-        compile.addIncludePath(b.path("external/wgpu/include"));
-        compile.addLibraryPath(.{ .cwd_relative = wgpu_bin_path });
+        // Nix will manage wgpu for us, don't do it manually.
+        const is_nix = if (std.process.getEnvVarOwned(b.allocator, "NIX")) |_| true else |_| false;
+        if (!is_nix) {
+            compile.addIncludePath(b.path("external/wgpu/include"));
+            compile.addLibraryPath(.{ .cwd_relative = wgpu_bin_path });
+        }
 
         switch (target.result.os.tag) {
             .windows => {

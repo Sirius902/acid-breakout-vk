@@ -24,6 +24,8 @@
           pkgs.glslang
           pkgs.vulkan-headers
 
+          pkgs.wgpu-native
+
           pkgs.libGL
           pkgs.libxkbcommon
           pkgs.vulkan-loader
@@ -32,6 +34,7 @@
           pkgs.xorg.libXcursor
           pkgs.xorg.libxcb
           pkgs.xorg.libXi
+          pkgs.xorg.libXrandr
         ];
       in rec {
         formatter = pkgs.alejandra;
@@ -45,6 +48,7 @@
             ]
             ++ libs;
 
+          env.NIX = 1;
           env.VULKAN_SDK = "${pkgs.vulkan-headers}";
 
           env.LD_LIBRARY_PATH = lib.makeLibraryPath libs;

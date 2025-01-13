@@ -65,7 +65,7 @@ pub fn init(
     const frame_size = window.getFramebufferSize();
     const extent = vk.Extent2D{ .width = frame_size.width, .height = frame_size.height };
 
-    const gc = try GraphicsContext.init(allocator, app_name, window);
+    const gc = try GraphicsContext.init(allocator, app_name, @ptrCast(window.handle));
     errdefer gc.deinit();
 
     var swapchain = try Swapchain.init(gc, allocator, extent, wait_for_vsync);
@@ -114,7 +114,7 @@ pub fn init(
     }, null);
     errdefer gc.vkd.destroyCommandPool(gc.dev, pool, null);
 
-    var ic = try ImGuiContext.init(gc, &swapchain, allocator, render_pass, window);
+    var ic = try ImGuiContext.init(gc, &swapchain, allocator, render_pass, @ptrCast(window.handle));
     errdefer ic.deinit();
 
     const cmdbufs = try createCommandBuffers(
@@ -680,8 +680,10 @@ fn recordCommandBuffer(
     try ic.renderDrawDataToTexture(cmdbuf);
 
     const game_size = math.vec2Cast(f32, game.size);
-    // Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
-    const view = zlm.Mat4.createOrthogonal(0, game_size.x, game_size.y, 0, 0, 1);
+    // NOTE(Sirius902) Near to far needs to be 1 and -1 so that the math works out to mapping depth
+    // to [0,1] as that is the clip range for Z in Vulkan.
+    // NOTE(Sirius902) Invert y-axis since zlm assumes OpenGL axes, but Vulkan's y-axis is the opposite direction.
+    const view = zlm.Mat4.createOrthogonal(0, game_size.x, game_size.y, 0, 1, -1);
 
     const aspect_ratio = (viewport.width / game_size.x) / (viewport.height / game_size.y);
     const aspect = if (viewport.width >= viewport.height)
