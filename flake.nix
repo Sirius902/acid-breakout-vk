@@ -46,6 +46,13 @@
           buildInputs =
             [
               packages.zig
+
+              (pkgs.zls.overrideAttrs (oldAttrs: {
+                version = "d2d5f43017e54e036df3c9cac365541ea5cabce9";
+                src = oldAttrs.src.override {
+                  hash = "sha256-qL9T/dgQLGgSk5vA+1ne3LSWIk3b+tGiNuAXPf2VexU=";
+                };
+              }))
             ]
             ++ libs;
 
