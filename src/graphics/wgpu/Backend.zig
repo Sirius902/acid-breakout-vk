@@ -172,6 +172,7 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
         }
 
         self.is_graphics_outdated = false;
+        return;
     }
 
     var encoder_desc: c.WGPUCommandEncoderDescriptor = .{ .label = "Render Command Encoder" };
@@ -180,6 +181,33 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
 
     var surface_texture: c.WGPUSurfaceTexture = undefined;
     c.wgpuSurfaceGetCurrentTexture(self.surface, &surface_texture);
+    defer {
+        if (surface_texture.texture != null)
+            c.wgpuTextureRelease(surface_texture.texture);
+    }
+
+    switch (surface_texture.status) {
+        c.WGPUSurfaceGetCurrentTextureStatus_Success => {
+            if (surface_texture.suboptimal != 0) {
+                self.is_graphics_outdated = true;
+                return;
+            }
+        },
+        c.WGPUSurfaceGetCurrentTextureStatus_Timeout,
+        c.WGPUSurfaceGetCurrentTextureStatus_Outdated,
+        c.WGPUSurfaceGetCurrentTextureStatus_Lost,
+        => {
+            self.is_graphics_outdated = true;
+            return;
+        },
+        c.WGPUSurfaceGetCurrentTextureStatus_OutOfMemory,
+        c.WGPUSurfaceGetCurrentTextureStatus_DeviceLost,
+        c.WGPUSurfaceGetCurrentTextureStatus_Force32,
+        => {
+            std.debug.panic("wgpu error getting surface_texture: status={}", .{surface_texture.status});
+        },
+        else => unreachable,
+    }
 
     const next_texture_desc: c.WGPUTextureViewDescriptor = .{
         .label = "Surface Texture View",
