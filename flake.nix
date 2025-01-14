@@ -29,6 +29,7 @@
           pkgs.libGL
           pkgs.libxkbcommon
           pkgs.vulkan-loader
+          pkgs.vulkan-validation-layers
           pkgs.wayland
           pkgs.xorg.libX11
           pkgs.xorg.libXcursor
@@ -50,6 +51,7 @@
 
           env.NIX = 1;
           env.VULKAN_SDK = "${pkgs.vulkan-headers}";
+          env.VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
 
           env.LD_LIBRARY_PATH = lib.makeLibraryPath libs;
         };
