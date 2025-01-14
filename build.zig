@@ -425,13 +425,13 @@ fn installSharedLibWindows(b: *std.Build, src_dir: []const u8, lib_name: []const
     const pdb_name = b.fmt("{s}{s}", .{ lib_name, ".pdb" });
     const pdb_path = b.pathJoin(&[_][]const u8{ src_dir, pdb_name });
 
-    const install_dll = b.addInstallBinFile(b.path(dll_path), dll_name);
+    const install_dll = b.addInstallBinFile(.{ .cwd_relative = dll_path }, dll_name);
 
     // Make sure pdb file exists before trying to install it
     if (std.fs.cwd().openFile(pdb_path, .{})) |pdb_file| {
         pdb_file.close();
 
-        const install_pdb = b.addInstallBinFile(b.path(pdb_path), pdb_name);
+        const install_pdb = b.addInstallBinFile(.{ .cwd_relative = pdb_path }, pdb_name);
         install_dll.step.dependOn(&install_pdb.step);
     } else |_| {}
 
