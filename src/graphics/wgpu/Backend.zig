@@ -232,9 +232,10 @@ pub fn renderFrame(self: *Self, game: *const Game, draw_list: *const DrawList) !
     const render_pass = c.wgpuCommandEncoderBeginRenderPass(encoder, &render_pass_desc);
 
     const game_size = math.vec2Cast(f32, game.size);
-    // NOTE(Sirius902) Near to far needs to be 1 and -1 so that the math works out to mapping depth
-    // to [0,1] as that is the clip range for Z in WebGPU.
-    const view = zlm.Mat4.createOrthogonal(0, game_size.x, 0, game_size.y, 1, -1);
+
+    // Map z-axis from [-1,1] to [0,1].
+    const opengl_to_wgpu = zlm.Mat4.createTranslationXYZ(0, 0, 1).mul(zlm.Mat4.createScale(1, 1, 0.5));
+    const view = zlm.Mat4.createOrthogonal(0, game_size.x, 0, game_size.y, 0, 1).mul(opengl_to_wgpu);
 
     const viewport = zlm.vec2(@floatFromInt(self.surface_extent.width), @floatFromInt(self.surface_extent.height));
     const aspect_ratio = (viewport.x / game_size.x) / (viewport.y / game_size.y);
